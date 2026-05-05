@@ -26,6 +26,7 @@ import { filterVisibleParts, normalizeParts } from './message/partUtils';
 import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { flattenAssistantTextParts } from '@/lib/messages/messageText';
 import { isLikelyProviderAuthFailure, PROVIDER_AUTH_FAILURE_MESSAGE } from '@/lib/messages/providerAuthError';
+import { formatModelDisplayName } from '@/lib/modelDisplayName';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
 import type { TurnGroupingContext } from './lib/turns/types';
 import { copyTextToClipboard } from '@/lib/clipboard';
@@ -358,7 +359,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         }
 
         if (modelID) {
-            return modelID;
+            return formatModelDisplayName(modelID) ?? modelID;
         }
 
         return undefined;
