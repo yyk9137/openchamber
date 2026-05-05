@@ -138,7 +138,7 @@ const resolveCodexPath = () => {
  * Manages one `codex app-server` subprocess per session, maps Codex JSON-RPC
  * events to openchamber's SSE event format, and handles approval/question flows.
  */
-export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted, onTurnError }) {
+export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted, onTurnError, onThreadNameUpdated }) {
   const codexPath = resolveCodexPath();
   let modelListCache = null;
   let modelListCacheExpiresAt = 0;
@@ -183,6 +183,8 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
    * @typedef {Object} ActiveMessage
    * @property {object} record - the assistant message record being built
    * @property {Map<string, string>} textBuffers - partId -> accumulated text
+   * @property {Set<string>} emittedParts - partIds already announced to the UI
+   * @property {Map<string, string>} partIds - Codex item key -> stable sortable partId
    */
 
   function createId() {
@@ -667,19 +669,7 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
         break;
 
       case 'thread/name/updated':
-        if (params?.name) {
-          emitEvent(proc.directory, {
-            type: 'session.updated',
-            properties: {
-              info: {
-                id: proc.sessionId,
-                title: params.name,
-                directory: proc.directory,
-              },
-              directory: proc.directory,
-            },
-          });
-        }
+        handleThreadNameUpdated(proc, params);
         break;
 
       case 'error':
@@ -691,28 +681,6 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
             directory: proc.directory,
           },
         });
-        break;
-
-      case 'codex/event/reasoning_content_delta':
-        // Alternative Codex-specific reasoning format: delta is in params.msg.delta
-        handleContentDelta(proc, 'item/reasoning/summaryTextDelta', {
-          ...(params?.msg || {}),
-          // Flatten msg fields so handleContentDelta can find the delta
-          delta: params?.msg?.delta,
-          textDelta: params?.msg?.delta,
-          itemId: params?.msg?.item_id || params?.msg?.itemId || params?.id || 'default',
-        });
-        break;
-
-      case 'codex/event/agent_reasoning':
-        // Agent-level reasoning progress — treat as reasoning delta
-        if (params?.msg?.text) {
-          handleContentDelta(proc, 'item/reasoning/textDelta', {
-            delta: params.msg.text,
-            textDelta: params.msg.text,
-            itemId: params?.id || 'default',
-          });
-        }
         break;
 
       case 'item/requestApproval/decision':
@@ -741,20 +709,41 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
     return '';
   }
 
+  function normalizeItemType(rawType) {
+    if (typeof rawType !== 'string') {
+      return '';
+    }
+    return rawType
+      .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+      .replace(/[\s./-]+/g, '_')
+      .toLowerCase();
+  }
+
   function getItemDetails(params) {
     const item = params?.item && typeof params.item === 'object' ? params.item : null;
+    const id = typeof params?.itemId === 'string' && params.itemId.length > 0
+      ? params.itemId
+      : typeof item?.id === 'string' && item.id.length > 0
+        ? item.id
+        : null;
 
     return {
-      id: params?.itemId || params?.id || item?.id || 'default',
-      type: params?.type || params?.itemType || item?.type || '',
+      id,
+      type: normalizeItemType(params?.type || params?.itemType || item?.type || ''),
       command: normalizeCommand(params?.command ?? item?.command),
+      cwd: typeof params?.cwd === 'string' ? params.cwd : typeof item?.cwd === 'string' ? item.cwd : '',
       filePath: params?.filePath || params?.path || item?.filePath || item?.file_path || item?.path || '',
+      output: typeof item?.aggregatedOutput === 'string' ? item.aggregatedOutput : '',
+      status: typeof item?.status === 'string' ? item.status : '',
     };
   }
 
   function getToolInput(partType, itemDetails) {
     if (partType === 'tool-output') {
-      return { command: itemDetails.command };
+      return {
+        command: itemDetails.command,
+        ...(itemDetails.cwd ? { cwd: itemDetails.cwd } : {}),
+      };
     }
 
     return { file_path: itemDetails.filePath };
@@ -791,10 +780,12 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
       return;
     }
 
-    // Use the Codex itemId to distinguish separate items within a turn
-    // (e.g., an agent message before an approval vs after).
     const itemDetails = getItemDetails(params);
     const itemId = itemDetails.id;
+    if (!itemId) {
+      console.warn(`[codex-appserver:${proc.sessionId}] skipping ${method} without itemId`);
+      return;
+    }
 
     // Determine part type based on method
     let partType = 'text';
@@ -806,36 +797,80 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
       partType = 'reasoning';
     }
 
-    const partId = `${proc.activeMessage.record.info.id}_${partType}_${itemId}`;
+    const partId = getPartId(proc, partType, itemId);
     const currentText = proc.activeMessage.textBuffers.get(partId) || '';
     const newText = currentText + delta;
     proc.activeMessage.textBuffers.set(partId, newText);
 
-    // Map internal part types to the UI's expected part schema.
-    // 'tool-output' and 'file-diff' should become tool parts so the UI renders
-    // them inside collapsible tool components rather than as plain assistant text.
+    ensurePartStarted(proc, partType, itemDetails);
+    emitEvent(proc.directory, {
+      type: 'message.part.delta',
+      properties: {
+        sessionID: proc.sessionId,
+        messageID: proc.activeMessage.record.info.id,
+        partID: partId,
+        field: partType === 'tool-output' || partType === 'file-diff' ? 'output' : 'text',
+        delta,
+        directory: proc.directory,
+      },
+    });
+  }
+
+  function rememberToolInput(proc, partId, partType, toolName, toolInput) {
+    if (!proc.activeMessage.toolInputs) {
+      proc.activeMessage.toolInputs = new Map();
+    }
+    const previousToolMeta = proc.activeMessage.toolInputs.get(partId);
+    if (!previousToolMeta || (!hasToolInputValue(previousToolMeta.input) && hasToolInputValue(toolInput))) {
+      proc.activeMessage.toolInputs.set(partId, {
+        partType,
+        toolName,
+        input: toolInput,
+      });
+    }
+  }
+
+  function getPartId(proc, partType, itemId) {
+    const key = `${partType}:${itemId}`;
+    const existing = proc.activeMessage.partIds?.get(key);
+    if (existing) {
+      return existing;
+    }
+    if (!proc.activeMessage.partIds) {
+      proc.activeMessage.partIds = new Map();
+    }
+    const sequence = String(proc.activeMessage.partIds.size + 1).padStart(6, '0');
+    const partId = `${proc.activeMessage.record.info.id}_${sequence}_${partType}_${itemId}`;
+    proc.activeMessage.partIds.set(key, partId);
+    return partId;
+  }
+
+  function ensurePartStarted(proc, partType, itemDetails) {
+    if (!proc.activeMessage || !itemDetails.id) {
+      return null;
+    }
+
+    if (!proc.activeMessage.emittedParts) {
+      proc.activeMessage.emittedParts = new Set();
+    }
+
+    const partId = getPartId(proc, partType, itemDetails.id);
+    if (proc.activeMessage.emittedParts.has(partId)) {
+      return partId;
+    }
+
+    const startTime = Date.now();
     let emitPart;
     if (partType === 'tool-output' || partType === 'file-diff') {
       const toolName = partType === 'tool-output' ? 'bash' : 'edit';
-      // Track the start time and input metadata for this tool part (first delta only)
       if (!proc.activeMessage.toolStartTimes) {
         proc.activeMessage.toolStartTimes = new Map();
       }
-      if (!proc.activeMessage.toolInputs) {
-        proc.activeMessage.toolInputs = new Map();
-      }
       const toolInput = getToolInput(partType, itemDetails);
       if (!proc.activeMessage.toolStartTimes.has(partId)) {
-        proc.activeMessage.toolStartTimes.set(partId, Date.now());
+        proc.activeMessage.toolStartTimes.set(partId, startTime);
       }
-      const previousToolMeta = proc.activeMessage.toolInputs.get(partId);
-      if (!previousToolMeta || (!hasToolInputValue(previousToolMeta.input) && hasToolInputValue(toolInput))) {
-        proc.activeMessage.toolInputs.set(partId, {
-          partType,
-          toolName,
-          input: toolInput,
-        });
-      }
+      rememberToolInput(proc, partId, partType, toolName, toolInput);
       emitPart = {
         id: partId,
         sessionID: proc.sessionId,
@@ -845,26 +880,24 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
         tool: toolName,
         state: {
           status: 'running',
-          output: newText,
+          output: '',
           input: toolInput,
           time: { start: proc.activeMessage.toolStartTimes.get(partId) },
         },
       };
     } else if (partType === 'reasoning') {
-      // Track start time for reasoning parts (needed by the UI to show duration
-      // and determine when reasoning is complete)
       if (!proc.activeMessage.toolStartTimes) {
         proc.activeMessage.toolStartTimes = new Map();
       }
       if (!proc.activeMessage.toolStartTimes.has(partId)) {
-        proc.activeMessage.toolStartTimes.set(partId, Date.now());
+        proc.activeMessage.toolStartTimes.set(partId, startTime);
       }
       emitPart = {
         id: partId,
         sessionID: proc.sessionId,
         messageID: proc.activeMessage.record.info.id,
         type: 'reasoning',
-        text: newText,
+        text: '',
         time: { start: proc.activeMessage.toolStartTimes.get(partId) },
       };
     } else {
@@ -873,12 +906,11 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
         sessionID: proc.sessionId,
         messageID: proc.activeMessage.record.info.id,
         type: 'text',
-        text: newText,
+        text: '',
       };
     }
 
-    console.info(`[codex-appserver:${proc.sessionId}] emitPart id=${emitPart.id} type=${emitPart.type} textLen=${(emitPart.text || emitPart.state?.output || '').length}`);
-
+    proc.activeMessage.emittedParts.add(partId);
     emitEvent(proc.directory, {
       type: 'message.part.updated',
       properties: {
@@ -886,11 +918,49 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
         directory: proc.directory,
       },
     });
+    return partId;
+  }
+
+  function handleThreadNameUpdated(proc, params) {
+    const title = typeof params?.threadName === 'string' && params.threadName.trim().length > 0
+      ? params.threadName.trim()
+      : typeof params?.name === 'string' && params.name.trim().length > 0
+        ? params.name.trim()
+        : null;
+    if (!title) {
+      return;
+    }
+
+    emitEvent(proc.directory, {
+      type: 'session.updated',
+      properties: {
+        info: {
+          id: proc.sessionId,
+          title,
+          directory: proc.directory,
+        },
+        directory: proc.directory,
+      },
+    });
+    if (onThreadNameUpdated) {
+      onThreadNameUpdated(proc.sessionId, title);
+    }
   }
 
   function handleItemStarted(proc, params) {
-    // Item started — we could track individual items, but for now
-    // the content deltas handle streaming. This is informational.
+    if (!proc.activeMessage) return;
+    const itemDetails = getItemDetails(params);
+    if (!itemDetails.id) return;
+
+    if (itemDetails.type === 'command_execution') {
+      ensurePartStarted(proc, 'tool-output', itemDetails);
+    } else if (itemDetails.type === 'file_change') {
+      ensurePartStarted(proc, 'file-diff', itemDetails);
+    } else if (itemDetails.type === 'reasoning') {
+      ensurePartStarted(proc, 'reasoning', itemDetails);
+    } else if (itemDetails.type === 'agent_message') {
+      ensurePartStarted(proc, 'text', itemDetails);
+    }
   }
 
   function handleItemCompleted(proc, params) {
@@ -902,6 +972,9 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
     const now = Date.now();
 
     console.info(`[codex-appserver:${proc.sessionId}] itemCompleted itemId=${itemId} itemType=${itemType}`);
+    if (!itemId) {
+      return;
+    }
 
     // Finalize tool parts (command_execution, file_change) with completed status
     let partType = null;
@@ -911,11 +984,15 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
       partType = 'file-diff';
     } else if (itemType === 'reasoning') {
       partType = 'reasoning';
+    } else if (itemType === 'agent_message') {
+      partType = 'text';
     }
 
     if (partType === 'tool-output' || partType === 'file-diff') {
-      const partId = `${proc.activeMessage.record.info.id}_${partType}_${itemId}`;
-      const output = proc.activeMessage.textBuffers.get(partId) || '';
+      ensurePartStarted(proc, partType, itemDetails);
+      const partId = getPartId(proc, partType, itemId);
+      const output = itemDetails.output || proc.activeMessage.textBuffers.get(partId) || '';
+      proc.activeMessage.textBuffers.set(partId, output);
       const startTime = proc.activeMessage.toolStartTimes?.get(partId) || now;
       const toolName = partType === 'tool-output' ? 'bash' : 'edit';
       const toolInput = getToolInput(partType, itemDetails);
@@ -957,7 +1034,8 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
       });
     } else if (partType === 'reasoning') {
       // Finalize reasoning part with end time so the UI knows reasoning is complete
-      const partId = `${proc.activeMessage.record.info.id}_reasoning_${itemId}`;
+      ensurePartStarted(proc, partType, itemDetails);
+      const partId = getPartId(proc, 'reasoning', itemId);
       const text = proc.activeMessage.textBuffers.get(partId) || '';
       const startTime = proc.activeMessage.toolStartTimes?.get(partId) || now;
 
@@ -977,6 +1055,26 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
           },
         });
       }
+    } else if (partType === 'text') {
+      const item = params?.item && typeof params.item === 'object' ? params.item : null;
+      if (typeof item?.text === 'string') {
+        const partId = getPartId(proc, 'text', itemId);
+        proc.activeMessage.textBuffers.set(partId, item.text);
+        ensurePartStarted(proc, partType, itemDetails);
+        emitEvent(proc.directory, {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: partId,
+              sessionID: proc.sessionId,
+              messageID: proc.activeMessage.record.info.id,
+              type: 'text',
+              text: item.text,
+            },
+            directory: proc.directory,
+          },
+        });
+      }
     }
   }
 
@@ -987,6 +1085,22 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
     // Finalize the active message
     const finalText = assembleFinalText(proc);
     const finalParts = assembleFinalParts(proc);
+    if (proc.activeMessage?.record?.info) {
+      emitEvent(proc.directory, {
+        type: 'message.updated',
+        properties: {
+          info: {
+            ...proc.activeMessage.record.info,
+            finish: 'stop',
+            time: {
+              ...proc.activeMessage.record.info.time,
+              completed: Date.now(),
+            },
+          },
+          directory: proc.directory,
+        },
+      });
+    }
 
     emitEvent(proc.directory, {
       type: 'session.status',
@@ -1007,7 +1121,11 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
     });
 
     if (onTurnCompleted) {
-      onTurnCompleted(proc.sessionId, finalText, params, finalParts);
+      onTurnCompleted(proc.sessionId, finalText, {
+        ...(params && typeof params === 'object' ? params : {}),
+        messageId: proc.activeMessage?.record?.info?.id,
+        parentMessageId: proc.activeMessage?.record?.info?.parentID,
+      }, finalParts);
     }
 
     proc.activeMessage = null;
@@ -1046,11 +1164,9 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
     if (!proc.activeMessage) {
       return '';
     }
-    // Collect all text content parts (keyed as _text_<itemId>)
-    const prefix = `${proc.activeMessage.record.info.id}_text_`;
     const textParts = [];
     for (const [key, value] of proc.activeMessage.textBuffers) {
-      if (key.startsWith(prefix) && value) {
+      if (key.startsWith(`${proc.activeMessage.record.info.id}_`) && key.includes('_text_') && value) {
         textParts.push(value);
       }
     }
@@ -1072,23 +1188,26 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
     for (const [key, value] of proc.activeMessage.textBuffers) {
       if (!value) continue;
 
-      if (key.startsWith(`${msgId}_reasoning_`)) {
+      if (key.startsWith(`${msgId}_`) && key.includes('_reasoning_')) {
         const startTime = proc.activeMessage.toolStartTimes?.get(key) || now;
         parts.push({
+          id: key,
           type: 'reasoning',
           text: value,
           time: { start: startTime, end: now },
         });
-      } else if (key.startsWith(`${msgId}_text_`)) {
+      } else if (key.startsWith(`${msgId}_`) && key.includes('_text_')) {
         parts.push({
+          id: key,
           type: 'text',
           text: value,
         });
-      } else if (key.startsWith(`${msgId}_tool-output_`) || key.startsWith(`${msgId}_file-diff_`)) {
+      } else if (key.startsWith(`${msgId}_`) && (key.includes('_tool-output_') || key.includes('_file-diff_'))) {
         const startTime = proc.activeMessage.toolStartTimes?.get(key) || now;
         const meta = proc.activeMessage.toolInputs?.get(key);
         const toolName = meta?.toolName || (key.includes('_tool-output_') ? 'bash' : 'edit');
         parts.push({
+          id: key,
           type: 'tool',
           callID: key,
           tool: toolName,
@@ -1200,6 +1319,8 @@ export function createCodexAppServerAdapter({ crypto, emitEvent, onTurnCompleted
       proc.activeMessage = {
         record: messageRecord,
         textBuffers: new Map(),
+        emittedParts: new Set(),
+        partIds: new Map(),
       };
 
       // Emit initial assistant message

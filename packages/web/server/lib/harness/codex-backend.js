@@ -167,16 +167,56 @@ const normalizeDirectory = (directory) => {
   return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
 };
 
-const cloneRecord = (record) => ({
-  info: {
+const hasSortableCodexPartId = (messageId, partId) => (
+  typeof messageId === 'string'
+  && typeof partId === 'string'
+  && partId.startsWith(`${messageId}_`)
+  && /^\d{6}_/.test(partId.slice(messageId.length + 1))
+);
+
+const codexPartTypeKey = (part) => {
+  if (part?.type === 'tool') {
+    return part.tool === 'edit' ? 'file-diff' : 'tool-output';
+  }
+  return typeof part?.type === 'string' && part.type.length > 0 ? part.type : 'part';
+};
+
+const normalizeCodexRecordPartIds = (record, parts) => {
+  const messageId = record?.info?.id;
+  if (record?.info?.role !== 'assistant' || typeof messageId !== 'string' || parts.length === 0) {
+    return parts;
+  }
+  if (parts.every((part) => hasSortableCodexPartId(messageId, part.id))) {
+    return parts;
+  }
+
+  return parts.map((part, index) => {
+    const previousId = part.id;
+    const sequence = String(index + 1).padStart(6, '0');
+    const typeKey = codexPartTypeKey(part);
+    const nextId = `${messageId}_${sequence}_${typeKey}_${previousId || index + 1}`;
+    return {
+      ...part,
+      id: nextId,
+      ...(part.type === 'tool' && (!part.callID || part.callID === previousId) ? { callID: nextId } : {}),
+    };
+  });
+};
+
+const cloneRecord = (record) => {
+  const info = {
     ...record.info,
     time: record.info?.time ? { ...record.info.time } : undefined,
     model: record.info?.model ? { ...record.info.model } : undefined,
-  },
-  parts: Array.isArray(record.parts)
+  };
+  const parts = Array.isArray(record.parts)
     ? record.parts.map((part) => ({ ...part }))
-    : [],
-});
+    : [];
+  return {
+    info,
+    parts: normalizeCodexRecordPartIds({ ...record, info }, parts),
+  };
+};
 
 const normalizeSessionEntry = (entry) => {
   if (!entry || typeof entry !== 'object') {
@@ -661,7 +701,9 @@ export const createCodexBackendRuntime = (dependencies) => {
         // pushed message.part.updated events to the UI in real time.
         // We only need to persist the final record to disk.
         if (finalText != null) {
-          const messageId = createSortableId('msg', crypto);
+          const messageId = typeof turnParams?.messageId === 'string' && turnParams.messageId.trim().length > 0
+            ? turnParams.messageId.trim()
+            : createSortableId('msg', crypto);
 
           // Build parts array from the structured finalParts (text, reasoning, tool)
           // so that reasoning traces and tool calls survive a page refresh.
@@ -670,7 +712,7 @@ export const createCodexBackendRuntime = (dependencies) => {
             for (const fp of finalParts) {
               if (fp.type === 'reasoning' && fp.text) {
                 recordParts.push({
-                  id: createId(crypto),
+                  id: typeof fp.id === 'string' && fp.id.length > 0 ? fp.id : createId(crypto),
                   sessionID: entry.session.id,
                   messageID: messageId,
                   type: 'reasoning',
@@ -678,14 +720,18 @@ export const createCodexBackendRuntime = (dependencies) => {
                   time: fp.time || { start: Date.now(), end: Date.now() },
                 });
               } else if (fp.type === 'text' && fp.text) {
-                recordParts.push(buildTextPart(entry.session.id, messageId, fp.text));
-              } else if (fp.type === 'tool' && fp.state) {
                 recordParts.push({
-                  id: createId(crypto),
+                  ...buildTextPart(entry.session.id, messageId, fp.text),
+                  ...(typeof fp.id === 'string' && fp.id.length > 0 ? { id: fp.id } : {}),
+                });
+              } else if (fp.type === 'tool' && fp.state) {
+                const partId = typeof fp.id === 'string' && fp.id.length > 0 ? fp.id : createId(crypto);
+                recordParts.push({
+                  id: partId,
                   sessionID: entry.session.id,
                   messageID: messageId,
                   type: 'tool',
-                  callID: fp.callID || createId(crypto),
+                  callID: fp.callID || partId,
                   tool: fp.tool || 'unknown',
                   state: fp.state,
                 });
@@ -708,7 +754,9 @@ export const createCodexBackendRuntime = (dependencies) => {
             modelId: entry.modelId,
             mode: entry.mode,
             effort: entry.effort,
+            parentMessageId: turnParams?.parentMessageId,
           });
+          assistantRecord.info.id = messageId;
 
           // Ensure all parts reference the record's message ID
           for (const part of assistantRecord.parts) {
@@ -724,6 +772,29 @@ export const createCodexBackendRuntime = (dependencies) => {
     },
     onTurnError: (sessionId, error) => {
       // Handled by the appserver adapter's onExit / error events
+    },
+    onThreadNameUpdated: async (sessionId, title) => {
+      try {
+        const entry = await getEntry(sessionId);
+        if (!entry || entry.session.title === title) {
+          return;
+        }
+        const nextEntry = {
+          ...entry,
+          session: {
+            ...entry.session,
+            title,
+            time: {
+              ...entry.session.time,
+              updated: Date.now(),
+            },
+          },
+        };
+        await saveEntry(nextEntry);
+        emitSessionUpdate('session.updated', nextEntry.session);
+      } catch (err) {
+        console.error(`[codex-backend] thread name update failed for ${sessionId}:`, err);
+      }
     },
   });
 

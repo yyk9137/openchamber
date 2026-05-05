@@ -17,9 +17,13 @@ const codexAppServerState = {
   listPendingPermissions: vi.fn(),
   listPendingQuestions: vi.fn(),
 };
+let codexAdapterOptions = null;
 
 vi.mock('./codex-appserver.js', () => ({
-  createCodexAppServerAdapter: () => codexAppServerState,
+  createCodexAppServerAdapter: (options) => {
+    codexAdapterOptions = options;
+    return codexAppServerState;
+  },
 }));
 
 const { createCodexBackendRuntime } = await import('./codex-backend.js');
@@ -87,6 +91,7 @@ const createRuntime = () => {
 describe('Codex backend runtime baseline contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    codexAdapterOptions = null;
     codexAppServerState.listModels.mockResolvedValue([
       { id: 'gpt-5.5-mini', label: 'GPT 5.5 Mini' },
       { id: 'gpt-5.5', label: 'GPT 5.5', isDefault: true },
@@ -101,6 +106,124 @@ describe('Codex backend runtime baseline contract', () => {
     codexAppServerState.hasQuestionRequest.mockReturnValue(false);
     codexAppServerState.listPendingPermissions.mockReturnValue([]);
     codexAppServerState.listPendingQuestions.mockReturnValue([]);
+  });
+
+  it('persists completed assistant turns with the live streaming message id', async () => {
+    const { runtime } = createRuntime();
+    const session = await runtime.createSession({ directory: '/repo' });
+
+    await runtime.promptAsync({
+      sessionID: session.id,
+      messageID: 'msg-user-1',
+      parts: [{ type: 'text', text: 'Build it' }],
+    });
+
+    const assistantRecord = codexAppServerState.startTurn.mock.calls[0][2];
+    await codexAdapterOptions.onTurnCompleted(session.id, 'Done.', {
+      messageId: assistantRecord.info.id,
+      parentMessageId: 'msg-user-1',
+    }, [
+      { type: 'text', text: 'Done.' },
+    ]);
+
+    const records = await runtime.getMessages({ sessionID: session.id });
+    expect(records).toHaveLength(2);
+    expect(records[1].info).toEqual(expect.objectContaining({
+      id: assistantRecord.info.id,
+      role: 'assistant',
+      parentID: 'msg-user-1',
+    }));
+    expect(records[1].parts[0]).toEqual(expect.objectContaining({
+      messageID: assistantRecord.info.id,
+      text: 'Done.',
+    }));
+  });
+
+  it('keeps live Codex part ids in persisted assistant records for reload parity', async () => {
+    const { runtime } = createRuntime();
+    const session = await runtime.createSession({ directory: '/repo' });
+
+    await runtime.promptAsync({
+      sessionID: session.id,
+      messageID: 'msg-user-1',
+      parts: [{ type: 'text', text: 'Build it' }],
+    });
+
+    const assistantRecord = codexAppServerState.startTurn.mock.calls[0][2];
+    await codexAdapterOptions.onTurnCompleted(session.id, 'Done.', {
+      messageId: assistantRecord.info.id,
+      parentMessageId: 'msg-user-1',
+    }, [
+      {
+        id: `${assistantRecord.info.id}_000001_reasoning_reason-1`,
+        type: 'reasoning',
+        text: 'Thinking',
+        time: { start: 1, end: 2 },
+      },
+      {
+        id: `${assistantRecord.info.id}_000002_tool-output_cmd-1`,
+        type: 'tool',
+        tool: 'bash',
+        callID: `${assistantRecord.info.id}_000002_tool-output_cmd-1`,
+        state: {
+          status: 'completed',
+          output: 'ok',
+          input: { command: 'bun test' },
+          time: { start: 3, end: 4 },
+        },
+      },
+      {
+        id: `${assistantRecord.info.id}_000003_text_text-1`,
+        type: 'text',
+        text: 'Done.',
+      },
+    ]);
+
+    const records = await runtime.getMessages({ sessionID: session.id });
+    const persistedAssistant = records[1];
+    expect(persistedAssistant.parts.map((part) => part.id)).toEqual([
+      `${assistantRecord.info.id}_000001_reasoning_reason-1`,
+      `${assistantRecord.info.id}_000002_tool-output_cmd-1`,
+      `${assistantRecord.info.id}_000003_text_text-1`,
+    ]);
+    expect(persistedAssistant.parts[1].callID).toBe(`${assistantRecord.info.id}_000002_tool-output_cmd-1`);
+  });
+
+  it('normalizes legacy Codex assistant part ids on read to stable sortable order', async () => {
+    const { runtime } = createRuntime();
+    const session = await runtime.createSession({ directory: '/repo' });
+
+    await runtime.promptAsync({
+      sessionID: session.id,
+      messageID: 'msg-user-1',
+      parts: [{ type: 'text', text: 'Build it' }],
+    });
+
+    const assistantRecord = codexAppServerState.startTurn.mock.calls[0][2];
+    await codexAdapterOptions.onTurnCompleted(session.id, 'Done.', {
+      messageId: assistantRecord.info.id,
+      parentMessageId: 'msg-user-1',
+    }, [
+      { type: 'reasoning', text: 'Thinking', time: { start: 1, end: 2 } },
+      {
+        type: 'tool',
+        tool: 'bash',
+        callID: 'legacy-call',
+        state: {
+          status: 'completed',
+          output: 'ok',
+          input: { command: 'bun test' },
+          time: { start: 3, end: 4 },
+        },
+      },
+      { type: 'text', text: 'Done.' },
+    ]);
+
+    const records = await runtime.getMessages({ sessionID: session.id });
+    const persistedAssistant = records[1];
+    expect(persistedAssistant.parts[0].id).toContain(`${assistantRecord.info.id}_000001_reasoning_`);
+    expect(persistedAssistant.parts[1].id).toContain(`${assistantRecord.info.id}_000002_tool-output_`);
+    expect(persistedAssistant.parts[2].id).toContain(`${assistantRecord.info.id}_000003_text_`);
   });
 
   it('creates, persists, lists, and announces Codex sessions with OpenCode-compatible metadata', async () => {
