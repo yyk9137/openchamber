@@ -269,11 +269,23 @@ export const registerServerStatusRoutes = (app, dependencies) => {
 
 export const registerAuthAndAccessRoutes = (app, dependencies) => {
   const {
+    express,
     tunnelAuthController,
     uiAuthController,
+    remoteClientAuthRuntime,
     readSettingsFromDiskMigrated,
     normalizeTunnelSessionTtlMs,
   } = dependencies;
+
+  const runWithUiAuth = async (req, res, next, handler) => {
+    try {
+      await uiAuthController.requireAuth(req, res, async () => {
+        await handler();
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
 
   app.get('/auth/session', async (req, res) => {
     const requestScope = tunnelAuthController.classifyRequestScope(req);
@@ -393,6 +405,31 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get('/api/client-auth/clients', async (req, res, next) => {
+    await runWithUiAuth(req, res, next, async () => {
+      const clients = await remoteClientAuthRuntime.listClients();
+      res.json({ clients });
+    });
+  });
+
+  app.post('/api/client-auth/clients', express.json({ limit: '64kb' }), async (req, res, next) => {
+    await runWithUiAuth(req, res, next, async () => {
+      const result = await remoteClientAuthRuntime.createClient({ label: req.body?.label });
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(201).json(result);
+    });
+  });
+
+  app.delete('/api/client-auth/clients/:id', async (req, res, next) => {
+    await runWithUiAuth(req, res, next, async () => {
+      const result = await remoteClientAuthRuntime.revokeClient(req.params?.id);
+      if (!result.revoked) {
+        return res.status(404).json({ revoked: false, error: 'Client not found' });
+      }
+      res.json(result);
+    });
   });
 
   app.get('/connect', async (req, res) => {

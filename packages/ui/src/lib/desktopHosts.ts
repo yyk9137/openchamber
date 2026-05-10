@@ -11,7 +11,12 @@ type TauriGlobal = {
 export type DesktopHost = {
   id: string;
   label: string;
+  /** Legacy/UI URL. During migration this may equal apiUrl. */
   url: string;
+  /** API endpoint used by packaged Electron UI for this instance. */
+  apiUrl?: string;
+  /** Remote client bearer token for packaged-client API access. */
+  clientToken?: string;
 };
 
 export type DesktopHostsConfig = {
@@ -122,8 +127,20 @@ const parseHost = (value: unknown): DesktopHost | null => {
   const id = readString(value, 'id');
   const label = readString(value, 'label');
   const url = readString(value, 'url');
+  const apiUrl = readString(value, 'apiUrl') || readString(value, 'api_url');
+  const clientToken = readString(value, 'clientToken') || readString(value, 'client_token');
   if (!id || !label || !url) return null;
-  return { id, label, url };
+  return {
+    id,
+    label,
+    url,
+    ...(apiUrl ? { apiUrl } : {}),
+    ...(clientToken ? { clientToken } : {}),
+  };
+};
+
+export const getDesktopHostApiUrl = (host: DesktopHost): string => {
+  return normalizeHostUrl(host.apiUrl || host.url) || host.apiUrl || host.url;
 };
 
 const getInvoke = (): TauriInvoke | null => {

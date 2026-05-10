@@ -90,4 +90,20 @@ describe('ui auth client credential seam', () => {
     expect(deniedRes.statusCode).toBe(401);
     expect(deniedRes.body).toEqual({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
   });
+
+  it('reports authenticated client session status with bearer credentials', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({
+      password: 'secret',
+      clientAuthController: {
+        authenticateBearerToken: async (token) => token === 'client-token' ? { ok: true, clientId: 'device-1' } : null,
+      },
+    });
+    const req = { method: 'GET', headers: { authorization: 'Bearer client-token' } };
+    const res = createResponse();
+
+    await auth.handleSessionStatus(req, res);
+
+    expect(res.body).toEqual({ authenticated: true, scope: 'client' });
+  });
 });

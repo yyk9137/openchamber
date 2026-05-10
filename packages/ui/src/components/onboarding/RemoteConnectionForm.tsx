@@ -126,6 +126,7 @@ export function RemoteConnectionForm({
         id: hostId,
         label: hostLabel,
         url: normalizedUrl,
+        apiUrl: normalizedUrl,
       };
 
       const updatedHosts = existingHost

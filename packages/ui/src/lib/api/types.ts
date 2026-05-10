@@ -1015,6 +1015,30 @@ export interface GitHubAPI {
   repoBranches(owner: string, repo: string): Promise<string[]>;
 }
 
+export interface RemoteClientRecord {
+  id: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface RemoteClientCreateResult {
+  client: RemoteClientRecord;
+  token: string;
+}
+
+export interface RemoteClientRevokeResult {
+  revoked: boolean;
+  client?: RemoteClientRecord;
+}
+
+export interface ClientAuthAPI {
+  listClients(): Promise<RemoteClientRecord[]>;
+  createClient(input?: { label?: string }): Promise<RemoteClientCreateResult>;
+  revokeClient(id: string): Promise<RemoteClientRevokeResult>;
+}
+
 export interface RuntimeAPIs {
   runtime: RuntimeDescriptor;
   terminal: TerminalAPI;
@@ -1026,6 +1050,7 @@ export interface RuntimeAPIs {
   github?: GitHubAPI;
   push?: PushAPI;
   diagnostics?: DiagnosticsAPI;
+  clientAuth?: ClientAuthAPI;
   tools: ToolsAPI;
   editor?: EditorAPI;
   vscode?: VSCodeAPI;

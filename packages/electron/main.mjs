@@ -376,6 +376,10 @@ const normalizeHostUrl = (raw) => {
 };
 
 const sanitizeHostUrlForStorage = (raw) => normalizeHostUrl(raw);
+const sanitizeClientTokenForStorage = (raw) => {
+  const token = typeof raw === 'string' ? raw.trim() : '';
+  return token.length > 0 ? token : null;
+};
 
 const readDesktopHostsConfig = () => {
   const root = readSettingsRoot();
@@ -385,8 +389,10 @@ const readDesktopHostsConfig = () => {
       const id = typeof entry?.id === 'string' ? entry.id.trim() : '';
       const url = sanitizeHostUrlForStorage(entry?.url);
       if (!id || id === LOCAL_HOST_ID || !url) return null;
+      const apiUrl = sanitizeHostUrlForStorage(entry?.apiUrl) || url;
+      const clientToken = sanitizeClientTokenForStorage(entry?.clientToken);
       const label = typeof entry?.label === 'string' && entry.label.trim() ? entry.label.trim() : url;
-      return { id, label, url };
+      return { id, label, url, apiUrl, ...(clientToken ? { clientToken } : {}) };
     })
     .filter(Boolean);
 
@@ -407,10 +413,14 @@ const writeDesktopHostsConfig = async (config) => {
             const id = typeof entry?.id === 'string' ? entry.id.trim() : '';
             const url = sanitizeHostUrlForStorage(entry?.url);
             if (!id || id === LOCAL_HOST_ID || !url) return null;
+            const apiUrl = sanitizeHostUrlForStorage(entry?.apiUrl) || url;
+            const clientToken = sanitizeClientTokenForStorage(entry?.clientToken);
             return {
               id,
               label: typeof entry?.label === 'string' && entry.label.trim() ? entry.label.trim() : url,
               url,
+              apiUrl,
+              ...(clientToken ? { clientToken } : {}),
             };
           })
           .filter(Boolean)
