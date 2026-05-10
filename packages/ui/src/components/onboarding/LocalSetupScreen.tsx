@@ -7,6 +7,7 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { restartDesktopApp } from '@/lib/desktop';
 import { useI18n } from '@/lib/i18n';
+import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 
 const INSTALL_COMMAND = 'curl -fsSL https://opencode.ai/install | bash';
 const DOCS_URL = 'https://opencode.ai/docs';
@@ -134,7 +135,7 @@ export function LocalSetupScreen({
 
   const checkCliAvailability = React.useCallback(async (): Promise<boolean> => {
     try {
-      const response = await fetch('/health');
+      const response = await fetch(getRuntimeUrlResolver().health());
       if (!response.ok) return false;
       const data = await response.json();
       return data.openCodeRunning === true || data.isOpenCodeReady === true;

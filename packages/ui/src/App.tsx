@@ -31,6 +31,7 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { opencodeClient } from '@/lib/opencode/client';
+import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { SyncProvider, useSessions } from '@/sync/sync-context';
 import { ConfigUpdateOverlay } from '@/components/ui/ConfigUpdateOverlay';
 import { AboutDialog } from '@/components/ui/AboutDialog';
@@ -303,7 +304,7 @@ function App({ apis }: AppProps) {
     let cancelled = false;
 
     const run = async () => {
-      const res = await fetch('/health', { method: 'GET' }).catch(() => null);
+      const res = await fetch(getRuntimeUrlResolver().health(), { method: 'GET' }).catch(() => null);
       if (!res || !res.ok || cancelled) return;
       const data = (await res.json().catch(() => null)) as null | {
         planModeExperimentalEnabled?: unknown;

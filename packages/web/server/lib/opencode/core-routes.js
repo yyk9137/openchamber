@@ -32,6 +32,19 @@ export const registerServerStatusRoutes = (app, dependencies) => {
     });
   };
 
+  const compatibility = {
+    apiVersion: 1,
+    minClientApiVersion: 1,
+    capabilities: [
+      'api.health.v1',
+      'api.runtime-url.v1',
+      'api.raw-file.v1',
+      'realtime.sse.v1',
+      'realtime.websocket.global-events.v1',
+      'terminal.websocket.v1',
+    ],
+  };
+
   const isDevShutdownAllowed = () => {
     // Dev-only escape hatch: allow terminating the whole dev process group.
     // This should never be enabled in production runtimes.
@@ -142,7 +155,20 @@ export const registerServerStatusRoutes = (app, dependencies) => {
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
+      openchamberVersion,
+      runtime: runtimeName,
+      compatibility,
       ...getHealthSnapshot(),
+    });
+  });
+
+  app.get('/api/version', (_req, res) => {
+    res.json({
+      status: 'ok',
+      openchamberVersion,
+      runtime: runtimeName,
+      startedAt: serverStartedAt,
+      compatibility,
     });
   });
 

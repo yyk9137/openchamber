@@ -1,3 +1,5 @@
+import { getRuntimeUrlResolver } from './runtime-url';
+
 export type ScheduledTaskRanEvent = {
   type: 'scheduled-task-ran';
   projectId: string;
@@ -129,7 +131,7 @@ const connect = () => {
 
   cleanupSource();
 
-  const source = new EventSource('/api/openchamber/events');
+  const source = new EventSource(getRuntimeUrlResolver().sse('/api/openchamber/events'));
   source.onopen = () => {
     resetHeartbeatTimer();
   };

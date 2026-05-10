@@ -30,6 +30,7 @@ import { ensurePierreThemeRegistered } from '@/lib/shiki/appThemeRegistry';
 import { getDefaultTheme } from '@/lib/theme/themes';
 import { getImageMimeType, getLanguageFromExtension, isImageFile } from '@/lib/toolHelpers';
 import type { FileListEntry, FileSearchResult } from '@/lib/api/types';
+import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { cn } from '@/lib/utils';
 
 type MobileFilesRoute =
@@ -78,7 +79,7 @@ const getImageSrc = (path: string): string => {
   if (path.toLowerCase().endsWith('.svg')) {
     return '';
   }
-  return `/api/fs/raw?${new URLSearchParams({ path }).toString()}`;
+  return getRuntimeUrlResolver().rawFile(path);
 };
 
 const isMarkdownFile = (path: string): boolean => /\.(md|mdx|markdown)$/i.test(path);
