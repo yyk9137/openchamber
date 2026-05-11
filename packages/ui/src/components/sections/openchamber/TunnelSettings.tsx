@@ -29,6 +29,7 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { openExternalUrl } from '@/lib/url';
+import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 
 type TunnelState =
   | 'checking'
@@ -372,7 +373,14 @@ export const TunnelSettings: React.FC = () => {
     if (typeof window === 'undefined') {
       return null;
     }
-    const parsed = Number(window.location.port);
+    const runtimeApiBaseUrl = getRuntimeApiBaseUrl();
+    const portSource = runtimeApiBaseUrl || window.location.href;
+    let parsed = 0;
+    try {
+      parsed = Number(new URL(portSource).port);
+    } catch {
+      parsed = Number(window.location.port);
+    }
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed;
     }

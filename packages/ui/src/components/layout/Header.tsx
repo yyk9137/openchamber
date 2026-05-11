@@ -65,8 +65,8 @@ import { OpenInAppButton } from '@/components/desktop/OpenInAppButton';
 import { forceKillTerminal } from '@/lib/terminalApi';
 import { useTerminalStore } from '@/stores/useTerminalStore';
 import { ProjectActionsButton } from '@/components/layout/ProjectActionsButton';
-import { canUseElectronDesktopIPC, invokeDesktop, isDesktopShell, isVSCodeRuntime, startDesktopWindowDrag } from '@/lib/desktop';
-import { desktopHostsGet, locationMatchesHost, redactSensitiveUrl } from '@/lib/desktopHosts';
+import { canUseElectronDesktopIPC, invokeDesktop, isDesktopLocalOriginActive, isDesktopShell, isVSCodeRuntime, startDesktopWindowDrag } from '@/lib/desktop';
+import { desktopHostsGet, getDesktopHostApiUrl, locationMatchesHost, redactSensitiveUrl } from '@/lib/desktopHosts';
 import { resolveSessionDiffStats } from '@/components/session/sidebar/utils';
 import { useI18n } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
@@ -836,17 +836,22 @@ export const Header: React.FC<HeaderProps> = ({
     }
 
     try {
-      const cfg = await desktopHostsGet();
-      const currentHref = window.location.href;
-      const localOrigin = window.__OPENCHAMBER_LOCAL_ORIGIN__ || window.location.origin;
+      if (isDesktopLocalOriginActive()) {
+        setCurrentInstanceLabel('Local');
+        return;
+      }
 
-      if (locationMatchesHost(currentHref, localOrigin)) {
+      const cfg = await desktopHostsGet();
+      const localOrigin = window.__OPENCHAMBER_LOCAL_ORIGIN__ || window.location.origin;
+      const runtimeApiBaseUrl = getRuntimeApiBaseUrl();
+
+      if (runtimeApiBaseUrl && locationMatchesHost(runtimeApiBaseUrl, localOrigin)) {
         setCurrentInstanceLabel('Local');
         return;
       }
 
       const match = cfg.hosts.find((host) => {
-        return locationMatchesHost(currentHref, host.url);
+        return runtimeApiBaseUrl ? locationMatchesHost(runtimeApiBaseUrl, getDesktopHostApiUrl(host)) : false;
       });
 
       if (match?.label?.trim()) {

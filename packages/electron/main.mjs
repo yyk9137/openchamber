@@ -904,7 +904,7 @@ const spawnLocalServer = async () => {
     host: bindHost,
     attachSignals: false,
     exitOnShutdown: false,
-    apiOnly: shouldUsePackagedUi(),
+    apiOnly: shouldUsePackagedUi() && !lanAccessEnabled,
     onDesktopNotification: (payload) => maybeShowNativeNotification(payload),
   });
 

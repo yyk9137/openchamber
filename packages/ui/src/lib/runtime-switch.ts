@@ -54,6 +54,20 @@ export const getRuntimeKey = (): string => {
   return normalizeRuntimeUrlKey(apiBaseUrl);
 };
 
+export const initializeRuntimeEndpoint = (options: { apiBaseUrl?: string | null; runtimeKey?: string | null } = {}): void => {
+  if (activeApiBaseUrl || activeRuntimeKey) {
+    return;
+  }
+
+  const apiBaseUrl = options.apiBaseUrl?.trim() || readInjectedApiBaseUrl();
+  if (!apiBaseUrl) {
+    return;
+  }
+
+  activeApiBaseUrl = apiBaseUrl;
+  activeRuntimeKey = options.runtimeKey?.trim() || (sameOrigin(apiBaseUrl, readInjectedLocalOrigin()) ? 'local' : normalizeRuntimeUrlKey(apiBaseUrl));
+};
+
 export const switchRuntimeEndpoint = (options: { apiBaseUrl: string; clientToken?: string | null; runtimeKey?: string | null }): void => {
   const apiBaseUrl = options.apiBaseUrl.trim();
   const previousApiBaseUrl = getRuntimeApiBaseUrl();

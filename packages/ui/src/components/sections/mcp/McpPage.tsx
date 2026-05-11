@@ -21,6 +21,7 @@ import {
 import { useMcpStore } from '@/stores/useMcpStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { runtimeFetch } from '@/lib/runtime-fetch';
+import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import {
   RiAddLine,
   RiArrowDownSLine,
@@ -515,7 +516,7 @@ const buildMcpOAuthRedirectUri = (name?: string | null, directory?: string | nul
     return null;
   }
 
-  const url = new URL(MCP_OAUTH_CALLBACK_PATH, window.location.origin);
+  const url = new URL(MCP_OAUTH_CALLBACK_PATH, getRuntimeApiBaseUrl() || window.location.origin);
   if (typeof name === 'string' && name.trim()) {
     url.searchParams.set('server', name.trim());
   }

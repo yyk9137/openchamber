@@ -64,6 +64,7 @@ import {
   type DesktopHost,
 } from '@/lib/desktopHosts';
 import { isDesktopShell } from '@/lib/desktop';
+import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 
 const randomPort = (): number => {
   return Math.floor(20000 + Math.random() * 30000);
@@ -521,7 +522,7 @@ export const RemoteInstancesPage: React.FC = () => {
     if (!clientAuth) return;
     setRemoteClientError(null);
     try {
-      const serverUrl = window.location.origin;
+      const serverUrl = normalizeHostUrl(getRuntimeApiBaseUrl()) || window.location.origin;
       const result = await clientAuth.createClient({ label: remoteClientLabel.trim() || 'Paired client' });
       const payload = buildClientConnectionPayload({ serverUrl, token: result.token, label: remoteClientLabel || 'OpenChamber' });
       const encoded = encodeClientConnectionPayload(payload);

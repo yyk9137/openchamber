@@ -1950,6 +1950,7 @@ export const dict: Record<I18nKey, string> = {
   'desktopHostSwitcher.header.currentDefaultColon': '当前默认：',
   'desktopHostSwitcher.status.connected': '已连接',
   'desktopHostSwitcher.status.authRequired': '需要认证',
+  'desktopHostSwitcher.status.checking': '检查中',
   'desktopHostSwitcher.status.incompatible': '不兼容',
   'desktopHostSwitcher.status.wrongService': '服务不匹配',
   'desktopHostSwitcher.status.unreachable': '不可达',

@@ -1233,6 +1233,7 @@ export const dict: Record<I18nKey, string> = {
   'desktopHostSwitcher.state.loading': 'Ładowanie...',
   'desktopHostSwitcher.status.authRequired': 'Wymagane uwierzytelnienie',
   'desktopHostSwitcher.status.connected': 'Połączono',
+  'desktopHostSwitcher.status.checking': 'Sprawdzanie',
   'desktopHostSwitcher.status.incompatible': 'Niekompatybilna',
   'desktopHostSwitcher.status.ping': ' · {ms}ms ping',
   'desktopHostSwitcher.status.unknown': 'Nieznany',

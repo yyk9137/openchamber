@@ -1984,6 +1984,7 @@ export const dict: Record<I18nKey, string> = {
   'desktopHostSwitcher.header.currentDefaultColon': '현재 기본값:',
   'desktopHostSwitcher.status.connected': '연결됨',
   'desktopHostSwitcher.status.authRequired': '인증 필요',
+  'desktopHostSwitcher.status.checking': '확인 중',
   'desktopHostSwitcher.status.incompatible': '호환되지 않음',
   'desktopHostSwitcher.status.wrongService': '잘못된 서비스',
   'desktopHostSwitcher.status.unreachable': '연결할 수 없음',

@@ -1,5 +1,7 @@
 import type { ProjectEntry } from '@/lib/api/types';
+import { getInjectedBootOutcome } from '@/lib/desktopBoot';
 import type { MobileKeyboardMode } from '@/lib/mobileKeyboardMode';
+import { getRuntimeApiBaseUrl, getRuntimeKey } from '@/lib/runtime-switch';
 
 export type AssistantNotificationPayload = {
   title?: string;
@@ -254,8 +256,34 @@ export const isDesktopLocalOriginActive = (): boolean => {
   if (typeof window === 'undefined') return false;
   if (!isDesktopShell()) return false;
 
+  if (getRuntimeKey() === 'local') {
+    return true;
+  }
+
   const local = typeof window.__OPENCHAMBER_LOCAL_ORIGIN__ === 'string' ? window.__OPENCHAMBER_LOCAL_ORIGIN__ : '';
   const localUrl = parseUrl(local);
+  const runtimeApiUrl = parseUrl(getRuntimeApiBaseUrl());
+
+  if (!runtimeApiUrl && localUrl && getInjectedBootOutcome()?.target === 'local') {
+    return true;
+  }
+
+  if (localUrl && runtimeApiUrl) {
+    if (localUrl.origin === runtimeApiUrl.origin) {
+      return true;
+    }
+
+    const localPort = localUrl.port || (localUrl.protocol === 'https:' ? '443' : '80');
+    const runtimePort = runtimeApiUrl.port || (runtimeApiUrl.protocol === 'https:' ? '443' : '80');
+
+    return (
+      localUrl.protocol === runtimeApiUrl.protocol &&
+      localPort === runtimePort &&
+      isLoopbackHost(localUrl.hostname) &&
+      isLoopbackHost(runtimeApiUrl.hostname)
+    );
+  }
+
   const currentUrl = parseUrl(window.location.origin);
 
   if (localUrl && currentUrl) {

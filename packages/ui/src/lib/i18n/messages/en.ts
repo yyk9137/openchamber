@@ -1984,6 +1984,7 @@ export const dict = {
   'desktopHostSwitcher.header.currentDefaultColon': 'Current default:',
   'desktopHostSwitcher.status.connected': 'Connected',
   'desktopHostSwitcher.status.authRequired': 'Auth required',
+  'desktopHostSwitcher.status.checking': 'Checking',
   'desktopHostSwitcher.status.incompatible': 'Incompatible',
   'desktopHostSwitcher.status.wrongService': 'Wrong service',
   'desktopHostSwitcher.status.unreachable': 'Unreachable',

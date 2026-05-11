@@ -5,6 +5,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { getDesktopLanAddress, isDesktopLocalOriginActive, isDesktopShell, restartDesktopApp } from '@/lib/desktop';
 import { useI18n } from '@/lib/i18n';
 import { runtimeFetch } from '@/lib/runtime-fetch';
+import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 
 export const DesktopNetworkSettings: React.FC = () => {
   const { t } = useI18n();
@@ -84,7 +85,14 @@ export const DesktopNetworkSettings: React.FC = () => {
       return null;
     }
 
-    const parsed = Number(window.location.port);
+    const runtimeApiBaseUrl = getRuntimeApiBaseUrl();
+    const portSource = runtimeApiBaseUrl || window.location.href;
+    let parsed = 0;
+    try {
+      parsed = Number(new URL(portSource).port);
+    } catch {
+      parsed = Number(window.location.port);
+    }
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   }, []);
   const lanUrl = draftValue && lanAddress && currentPort ? `http://${lanAddress}:${currentPort}` : null;

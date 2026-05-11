@@ -1950,6 +1950,7 @@ export const dict: Record<I18nKey, string> = {
   "desktopHostSwitcher.header.currentDefaultColon": "Поточне значення за умовчанням:",
   "desktopHostSwitcher.status.connected": "Підключено",
   "desktopHostSwitcher.status.authRequired": "Потрібна авторизація",
+  "desktopHostSwitcher.status.checking": "Перевірка",
   "desktopHostSwitcher.status.incompatible": "Несумісний",
   "desktopHostSwitcher.status.wrongService": "Неправильний сервіс",
   "desktopHostSwitcher.status.unreachable": "Недосяжний",

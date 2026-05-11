@@ -1950,6 +1950,7 @@ export const dict: Record<I18nKey, string> = {
   "desktopHostSwitcher.header.currentDefaultColon": "Padrão atual:",
   "desktopHostSwitcher.status.connected": "Conectado",
   "desktopHostSwitcher.status.authRequired": "Autenticação obrigatória",
+  "desktopHostSwitcher.status.checking": "Verificando",
   "desktopHostSwitcher.status.incompatible": "Incompatível",
   "desktopHostSwitcher.status.wrongService": "Serviço incorreto",
   "desktopHostSwitcher.status.unreachable": "Inacessível",
