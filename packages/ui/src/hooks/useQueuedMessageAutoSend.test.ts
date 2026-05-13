@@ -47,7 +47,9 @@ describe('buildQueuedAutoSendPayload', () => {
     visibleAgents = [
       {
         name: 'Builder',
-        mode: 'secondary',
+        mode: 'subagent',
+        permission: [],
+        options: {},
       } as Agent,
     ];
 
