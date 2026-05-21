@@ -1315,10 +1315,16 @@ export const useUIStore = create<UIStore>()(
         },
 
         setSessionSwitcherOpen: (open) => {
+          if (get().isSessionSwitcherOpen === open) {
+            return;
+          }
           set({ isSessionSwitcherOpen: open });
         },
 
         setSessionDropdownOpen: (open) => {
+          if (get().isSessionDropdownOpen === open) {
+            return;
+          }
           set({ isSessionDropdownOpen: open });
         },
 

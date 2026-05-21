@@ -36,9 +36,11 @@ import {
     useSessions,
     useDirectorySync,
     useDirectoryStore as useSyncDirectoryStore,
+    useSyncDirectory,
     useSessionStatus,
 } from '@/sync/sync-context';
 import { useSync } from '@/sync/use-sync';
+import { getSessionPrefetch, subscribeSessionPrefetch } from '@/sync/session-prefetch-cache';
 import { getSessionMaterializationStatus } from '@/sync/materialization';
 import { usePlanDetection } from '@/hooks/usePlanDetection';
 import { getAllSyncSessions } from '@/sync/sync-refs';
@@ -344,6 +346,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ autoOpenDraft = tr
 
     // Sync actions
     const sync = useSync();
+    const syncDirectory = useSyncDirectory();
     const ensureSessionRenderable = React.useCallback(
         (sessionId: string) => sync.ensureSessionRenderable(sessionId),
         [sync],
@@ -386,6 +389,19 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ autoOpenDraft = tr
     // Messages from sync system
     const sessionMessageRecords = useSessionMessageRecords(currentSessionId ?? '');
     const sessionMessages = currentSessionId ? sessionMessageRecords : EMPTY_MESSAGES;
+    const sessionPrefetchInfo = React.useSyncExternalStore(
+        React.useCallback(
+            (notify) => currentSessionId
+                ? subscribeSessionPrefetch(syncDirectory, currentSessionId, notify)
+                : () => undefined,
+            [currentSessionId, syncDirectory],
+        ),
+        React.useCallback(
+            () => currentSessionId ? getSessionPrefetch(syncDirectory, currentSessionId) : undefined,
+            [currentSessionId, syncDirectory],
+        ),
+        React.useCallback(() => undefined, []),
+    );
 
     // Sessions from sync system
     const sessions = useSessions();
@@ -393,7 +409,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ autoOpenDraft = tr
     const syncStore = useSyncDirectoryStore();
 
     // Plan detection - watches messages for plan creation and signals store
-    usePlanDetection(currentSessionId ?? '');
+    usePlanDetection(currentSessionId ?? '', sessionMessages);
 
     // Session status from sync system
     const sessionStatusForCurrent = useSessionStatus(currentSessionId ?? '') ?? IDLE_SESSION_STATUS;
@@ -498,12 +514,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ autoOpenDraft = tr
     // History metadata — use sync's hasMore/isLoading
     const historyMeta = React.useMemo(() => {
         if (!currentSessionId) return null;
+        const prefetchHasMore = Boolean(sessionPrefetchInfo?.cursor) && sessionPrefetchInfo?.complete !== true;
         return {
             limit: sessionMessages.length,
-            complete: !sync.hasMore(currentSessionId),
+            complete: !(sync.hasMore(currentSessionId) || prefetchHasMore),
             loading: sync.isLoading(currentSessionId),
         };
-    }, [currentSessionId, sessionMessages.length, sync]);
+    }, [currentSessionId, sessionMessages.length, sessionPrefetchInfo, sync]);
 
     const { isMobile } = useDeviceInfo();
     const draftOpen = Boolean(newSessionDraft?.open);
@@ -947,6 +964,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ autoOpenDraft = tr
 		<div className="relative flex flex-col h-full bg-background">
 			{returnToParentButton}
 			<ChatViewport
+				key={currentSessionId}
 				currentSessionId={currentSessionId}
                 isDesktopExpandedInput={isDesktopExpandedInput}
                 isMobile={isMobile}
