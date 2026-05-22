@@ -39,6 +39,35 @@ type SyncMeta = {
   loading: boolean
 }
 
+type SdkResult<T> = {
+  data?: T
+  error?: unknown
+  response?: {
+    status?: number
+    headers?: { get?: (name: string) => string | null }
+  }
+}
+
+function formatSdkError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === "string") return error
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === "string" && message.length > 0) return message
+  }
+  try {
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+function assertSdkSuccess<T>(result: SdkResult<T>, operation: string): void {
+  if (!result.error) return
+  const status = result.response?.status
+  throw new Error(`${operation} failed${status ? ` (${status})` : ""}: ${formatSdkError(result.error)}`)
+}
+
 const getEffectiveSessionCacheLimit = () => isVSCodeRuntime() ? VSCODE_SESSION_CACHE_LIMIT : SESSION_CACHE_LIMIT
 const getEffectiveMessagePageSize = () => isVSCodeRuntime() ? VSCODE_MESSAGE_PAGE_SIZE : MESSAGE_PAGE_SIZE
 const getVSCodeInitialPageExpansionMax = () => VSCODE_INITIAL_PAGE_EXPANSION_LIMITS[VSCODE_INITIAL_PAGE_EXPANSION_LIMITS.length - 1]
@@ -251,9 +280,11 @@ export function useSync() {
   // Fetch messages from API
   const fetchMessages = useCallback(
     async (sessionID: string, limit: number, before?: string) => {
-      const result = await retry(() =>
-        sdk.session.messages({ sessionID, directory, limit, before }),
-      )
+      const result = await retry(async () => {
+        const response = await sdk.session.messages({ sessionID, directory, limit, before })
+        assertSdkSuccess(response, "session.messages")
+        return response
+      })
       const items = (result.data ?? []).filter((x: { info?: { id?: string } }) => !!x?.info?.id)
       const session = items
         .map((x: { info: Message }) => stripMessageDiffSnapshots(x.info))
