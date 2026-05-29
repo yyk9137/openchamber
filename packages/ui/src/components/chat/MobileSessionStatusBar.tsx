@@ -453,12 +453,9 @@ export const MobileSessionPanelTrigger: React.FC<MobileSessionPanelTriggerProps>
   const showMobileSessionStatusBar = useUIStore((state) => state.showMobileSessionStatusBar);
   const open = useUIStore((state) => state.mobileSessionPanelOpen);
   const setOpen = useUIStore((state) => state.setMobileSessionPanelOpen);
-  const sessions = useAllProjectSessions();
-  const sessionStatus = useAllSessionStatuses();
-  const { totalRunning, totalUnread } = useSessionGrouping(sessions, sessionStatus);
 
-  // Ensure the cross-project session list is loaded once, so the activity dot
-  // and the panel reflect every project — not just the active directory.
+  // Ensure the cross-project session list is loaded once, so the panel reflects
+  // every project — not just the active directory.
   React.useEffect(() => {
     if (isMobile && showMobileSessionStatusBar) {
       void ensureGlobalSessionsLoaded();
@@ -468,8 +465,6 @@ export const MobileSessionPanelTrigger: React.FC<MobileSessionPanelTriggerProps>
   if (!isMobile || !showMobileSessionStatusBar) {
     return null;
   }
-
-  const hasActivity = totalRunning > 0 || totalUnread > 0;
 
   return (
     <button
@@ -491,12 +486,6 @@ export const MobileSessionPanelTrigger: React.FC<MobileSessionPanelTriggerProps>
       aria-expanded={open}
     >
       <Icon name="stack" className={cn(iconSizeClass)} />
-      {hasActivity && !open && (
-        <span
-          className="absolute top-0.5 right-0.5 h-1.5 w-1.5 rounded-full"
-          style={{ backgroundColor: totalRunning > 0 ? 'var(--status-info)' : 'var(--status-error)' }}
-        />
-      )}
     </button>
   );
 };
@@ -526,9 +515,11 @@ export const MobileSessionStatusBar: React.FC<MobileSessionStatusBarProps> = ({
   const getProjectStatus = useProjectStatus(sessions, sessionStatus, currentSessionId);
   const resolveProjectRoots = useProjectRootsResolver();
 
-  // Local filter. Defaults to "All" so sessions from every project are visible
-  // regardless of which session is currently selected.
-  const [filterProjectId, setFilterProjectId] = React.useState<string | null>(null);
+  // Project filter, persisted in the UI store so the choice survives closing and
+  // reopening the sheet. Defaults to "All" so sessions from every project are
+  // visible regardless of which session is currently selected.
+  const filterProjectId = useUIStore((state) => state.mobileSessionFilterProjectId);
+  const setFilterProjectId = useUIStore((state) => state.setMobileSessionFilterProjectId);
 
   // Refresh the cross-project session list when the panel opens (mirrors the
   // dedicated MobileSessionsSheet). The active-directory sync only upserts the
@@ -630,7 +621,7 @@ export const MobileSessionStatusBar: React.FC<MobileSessionStatusBarProps> = ({
         </div>
       )}
     </div>
-  ), [t, totalRunning, totalUnread, contextUsage, projects, filterProjectId, formatProjectLabel, currentTheme, getProjectStatus]);
+  ), [t, totalRunning, totalUnread, contextUsage, projects, filterProjectId, setFilterProjectId, formatProjectLabel, currentTheme, getProjectStatus]);
 
   if (!isMobile || !showMobileSessionStatusBar) {
     return null;
