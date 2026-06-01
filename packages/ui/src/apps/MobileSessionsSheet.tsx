@@ -41,7 +41,7 @@ import { toast } from '@/components/ui';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useI18n } from '@/lib/i18n';
-import { PROJECT_COLOR_MAP, PROJECT_ICON_MAP, getProjectIconImageUrl } from '@/lib/projectMeta';
+import { PROJECT_COLOR_MAP, PROJECT_ICON_MAP, ProjectIconImage } from '@/lib/projectMeta';
 import { cn } from '@/lib/utils';
 import { listProjectWorktrees } from '@/lib/worktrees/worktreeManager';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
@@ -150,23 +150,17 @@ const MobileProjectIcon: React.FC<{
   size?: 'sm' | 'md';
 }> = ({ project, size = 'md' }) => {
   const { currentTheme } = useThemeSystem();
-  const [imageFailed, setImageFailed] = React.useState(false);
-  React.useEffect(() => setImageFailed(false), [project.id, project.iconImage?.updatedAt]);
 
   const ProjectIcon = project.icon ? PROJECT_ICON_MAP[project.icon] : null;
   const iconColor = project.color ? PROJECT_COLOR_MAP[project.color] ?? null : null;
-  const imageUrl = !imageFailed
-    ? getProjectIconImageUrl(
-        { id: project.id, iconImage: project.iconImage ?? undefined },
-        {
-          themeVariant: currentTheme.metadata.variant,
-          iconColor: currentTheme.colors.surface.foreground,
-        },
-      )
-    : null;
 
   const containerClasses = size === 'sm' ? 'size-6 rounded-md' : 'size-8 rounded-lg';
   const innerClasses = size === 'sm' ? 'size-3.5' : 'size-4';
+  const fallbackIcon = ProjectIcon ? (
+    <Icon name={ProjectIcon} className={innerClasses} style={iconColor ? { color: iconColor } : undefined} />
+  ) : (
+    <RiFolder6Line className={innerClasses} style={iconColor ? { color: iconColor } : undefined} />
+  );
 
   return (
     <span
@@ -176,19 +170,17 @@ const MobileProjectIcon: React.FC<{
       )}
       style={project.iconBackground ? { backgroundColor: project.iconBackground } : undefined}
     >
-      {imageUrl ? (
-        <img
-          src={imageUrl}
-          alt=""
+      {project.iconImage ? (
+        <ProjectIconImage
+          project={{ id: project.id, iconImage: project.iconImage ?? null }}
+          options={{
+            themeVariant: currentTheme.metadata.variant,
+            iconColor: currentTheme.colors.surface.foreground,
+          }}
           className="size-full object-contain"
-          draggable={false}
-          onError={() => setImageFailed(true)}
+          fallback={fallbackIcon}
         />
-      ) : ProjectIcon ? (
-        <Icon name={ProjectIcon} className={innerClasses} style={iconColor ? { color: iconColor } : undefined} />
-      ) : (
-        <RiFolder6Line className={innerClasses} style={iconColor ? { color: iconColor } : undefined} />
-      )}
+      ) : fallbackIcon}
     </span>
   );
 };

@@ -11,7 +11,7 @@ import type { ProjectEntry } from '@/lib/api/types';
 import { cn, formatDirectoryName } from '@/lib/utils';
 import { getAgentColor } from '@/lib/agentColors';
 import type { SessionContextUsage } from '@/stores/types/sessionTypes';
-import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP, getProjectIconImageUrl } from '@/lib/projectMeta';
+import { PROJECT_ICON_MAP, PROJECT_COLOR_MAP, ProjectIconImage } from '@/lib/projectMeta';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { Icon } from "@/components/icon/Icon";
 import { useThemeSystem } from '@/contexts/useThemeSystem';
@@ -377,7 +377,8 @@ function SessionItem({
 interface ProjectFilterChipProps {
   label: string;
   icon?: string | null;
-  iconImageUrl?: string | null;
+  project?: Pick<ProjectEntry, 'id' | 'iconImage'> | null;
+  iconOptions?: React.ComponentProps<typeof ProjectIconImage>['options'];
   iconBackground?: string | null;
   colorVar?: string | null;
   isActive: boolean;
@@ -388,20 +389,18 @@ interface ProjectFilterChipProps {
 function ProjectFilterChip({
   label,
   icon,
-  iconImageUrl,
+  project,
+  iconOptions,
   iconBackground,
   colorVar,
   isActive,
   status,
   onClick,
 }: ProjectFilterChipProps) {
-  const [imageFailed, setImageFailed] = React.useState(false);
   const projectIconName = icon ? PROJECT_ICON_MAP[icon] : null;
-  const imageUrl = !imageFailed ? iconImageUrl : null;
-
-  React.useEffect(() => {
-    setImageFailed(false);
-  }, [iconImageUrl]);
+  const fallbackIcon = projectIconName ? (
+    <Icon name={projectIconName} className="h-4 w-4" style={!isActive && colorVar ? { color: colorVar } : undefined} />
+  ) : null;
 
   return (
     <button
@@ -420,16 +419,19 @@ function ProjectFilterChip({
           : <span className="h-1.5 w-1.5 rounded-full bg-[var(--status-error)]" />
       )}
 
-      {imageUrl ? (
+      {project?.iconImage ? (
         <span
           className="inline-flex h-4 w-4 items-center justify-center overflow-hidden rounded-[2px]"
           style={iconBackground ? { backgroundColor: iconBackground } : undefined}
         >
-          <img src={imageUrl} alt="" className="h-full w-full object-contain" draggable={false} onError={() => setImageFailed(true)} />
+          <ProjectIconImage
+            project={project}
+            options={iconOptions}
+            className="h-full w-full object-contain"
+            fallback={fallbackIcon}
+          />
         </span>
-      ) : projectIconName ? (
-        <Icon name={projectIconName} className="h-4 w-4" style={!isActive && colorVar ? { color: colorVar } : undefined} />
-      ) : null}
+      ) : fallbackIcon}
 
       <span className="max-w-[140px] truncate">{label}</span>
     </button>
@@ -603,10 +605,11 @@ export const MobileSessionStatusBar: React.FC<MobileSessionStatusBarProps> = ({
               key={project.id}
               label={formatProjectLabel(project)}
               icon={project.icon}
-              iconImageUrl={getProjectIconImageUrl(project, {
+              project={{ id: project.id, iconImage: project.iconImage ?? null }}
+              iconOptions={{
                 themeVariant: currentTheme.metadata.variant,
                 iconColor: currentTheme.colors.surface.foreground,
-              })}
+              }}
               iconBackground={project.iconBackground ?? null}
               colorVar={project.color ? (PROJECT_COLOR_MAP[project.color] ?? null) : null}
               isActive={filterProjectId === project.id}

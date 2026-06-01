@@ -209,6 +209,36 @@ describe('runtimeFetch transport contract', () => {
     }
   });
 
+  test('resolves URLSearchParams query and auth for runtime asset fetches', async () => {
+    const previous = getRuntimeUrlResolver();
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+
+    try {
+      configureRuntimeUrlResolver({ apiBaseUrl: 'https://runtime.example' });
+      setRuntimeBearerToken('runtime-token');
+
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ input, init });
+        return new Response(new Blob(['icon']), { status: 200 });
+      }) as typeof fetch;
+
+      await runtimeFetch('/api/projects/project-1/icon', {
+        method: 'GET',
+        headers: { Accept: 'image/*' },
+        query: new URLSearchParams({ v: '123', theme: 'dark', iconColor: '#fff' }),
+      });
+
+      expect(String(calls[0].input)).toBe('https://runtime.example/api/projects/project-1/icon?v=123&theme=dark&iconColor=%23fff');
+      const headers = new Headers(calls[0].init?.headers);
+      expect(headers.get('accept')).toBe('image/*');
+      expect(headers.get('authorization')).toBe('Bearer runtime-token');
+    } finally {
+      setRuntimeUrlResolver(previous);
+      globalThis.fetch = originalFetch;
+      clearRuntimeAuthCredentialProvider();
+    }
+  });
+
   test('does not attach runtime auth to non-runtime absolute URLs', async () => {
     const previous = getRuntimeUrlResolver();
     const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
