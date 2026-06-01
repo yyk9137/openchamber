@@ -208,4 +208,52 @@ describe('runtimeFetch transport contract', () => {
       clearRuntimeAuthCredentialProvider();
     }
   });
+
+  test('does not attach runtime auth to non-runtime absolute URLs', async () => {
+    const previous = getRuntimeUrlResolver();
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+
+    try {
+      configureRuntimeUrlResolver({ apiBaseUrl: 'https://runtime.example' });
+      setRuntimeBearerToken('runtime-token');
+
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ input, init });
+        return new Response(null, { status: 204 });
+      }) as typeof fetch;
+
+      await runtimeFetch('https://old-runtime.example/api/config/settings');
+
+      expect(String(calls[0].input)).toBe('https://old-runtime.example/api/config/settings');
+      expect(new Headers(calls[0].init?.headers).has('authorization')).toBe(false);
+    } finally {
+      setRuntimeUrlResolver(previous);
+      globalThis.fetch = originalFetch;
+      clearRuntimeAuthCredentialProvider();
+    }
+  });
+
+  test('attaches runtime auth to active runtime auth URLs', async () => {
+    const previous = getRuntimeUrlResolver();
+    const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+
+    try {
+      configureRuntimeUrlResolver({ apiBaseUrl: 'https://runtime.example' });
+      setRuntimeBearerToken('runtime-token');
+
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ input, init });
+        return new Response(JSON.stringify({ authenticated: true }), { status: 200 });
+      }) as typeof fetch;
+
+      await runtimeFetch('https://runtime.example/auth/session');
+
+      expect(String(calls[0].input)).toBe('https://runtime.example/auth/session');
+      expect(new Headers(calls[0].init?.headers).get('authorization')).toBe('Bearer runtime-token');
+    } finally {
+      setRuntimeUrlResolver(previous);
+      globalThis.fetch = originalFetch;
+      clearRuntimeAuthCredentialProvider();
+    }
+  });
 });

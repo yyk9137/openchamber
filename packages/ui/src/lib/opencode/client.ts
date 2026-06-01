@@ -356,11 +356,14 @@ class OpencodeService {
       }
 
       const previousDirectory = this.currentDirectory;
-      this.currentDirectory = this.normalizeCandidatePath(directory) ?? directory;
+      const scopedDirectory = this.normalizeCandidatePath(directory) ?? directory;
+      this.currentDirectory = scopedDirectory;
       try {
         return await fn();
       } finally {
-        this.currentDirectory = previousDirectory;
+        if (this.currentDirectory === scopedDirectory) {
+          this.currentDirectory = previousDirectory;
+        }
       }
     };
 
@@ -714,6 +717,7 @@ class OpencodeService {
       schema: Record<string, unknown>;
       retryCount?: number;
     };
+    directory?: string | null;
   }): Promise<string> {
     // Reuse one client-side message ID across retries. The server accepts this
     // as the real user message ID, making ambiguous network retries idempotent.
@@ -782,8 +786,10 @@ class OpencodeService {
       throw new Error('Message must have at least one part (text or file)');
     }
 
-    if (this.currentDirectory) {
-      await waitForWorktreeBootstrap(this.currentDirectory);
+    const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
+
+    if (requestDirectory) {
+      await waitForWorktreeBootstrap(requestDirectory);
     }
 
     if (params.format) {
@@ -793,7 +799,7 @@ class OpencodeService {
         modelID: params.modelID,
         agent: params.agent,
         variant: params.variant,
-        directory: this.currentDirectory,
+        directory: requestDirectory,
         baseUrl: this.baseUrl,
         formatType: params.format.type,
       });
@@ -807,7 +813,7 @@ class OpencodeService {
       try {
         const result = await this.client.session.promptAsync({
           sessionID: params.id,
-          ...(this.currentDirectory ? { directory: this.currentDirectory } : {}),
+          ...(requestDirectory ? { directory: requestDirectory } : {}),
           model: {
             providerID: params.providerID,
             modelID: params.modelID,
@@ -880,6 +886,7 @@ class OpencodeService {
     variant?: string;
     files?: Array<FileInputLite>;
     messageId?: string;
+    directory?: string | null;
   }): Promise<string> {
     const tempMessageId = params.messageId ?? ascendingId("msg");
 
@@ -890,9 +897,11 @@ class OpencodeService {
       }
     }
 
+    const requestDirectory = this.normalizeCandidatePath(params.directory ?? null) ?? this.currentDirectory;
+
     const response = await this.client.session.command({
       sessionID: params.id,
-      ...(this.currentDirectory ? { directory: this.currentDirectory } : {}),
+      ...(requestDirectory ? { directory: requestDirectory } : {}),
       command: params.command,
       arguments: params.arguments ?? '',
       model: `${params.providerID}/${params.modelID}`,

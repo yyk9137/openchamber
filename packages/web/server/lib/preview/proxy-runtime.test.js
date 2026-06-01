@@ -104,18 +104,19 @@ describe('preview body URL rewriting', () => {
     expect(output).toContain('<div>Preview</div>');
   });
 
-  it('adds preview token to rewritten proxy resources when provided', () => {
+  it('adds preview and URL auth tokens to rewritten proxy resources when provided', () => {
     const output = rewritePreviewBody({
-      bodyText: '<script src="/entry.js"></script><a href="http://localhost:3000/docs?x=1">Docs</a>',
+      bodyText: '<script src="/entry.js"></script><a href="http://localhost:3000/docs?x=1&oc_client_token=legacy">Docs</a>',
       kind: 'html',
       proxyBasePath: '/api/preview/proxy/abc123',
       targetOrigin: 'http://127.0.0.1:3000',
       previewToken: 'preview-secret',
-      clientToken: 'client-secret',
+      urlAuthToken: 'url-secret',
     });
 
-    expect(output).toContain('src="/api/preview/proxy/abc123/entry.js?oc_preview_token=preview-secret&oc_client_token=client-secret"');
-    expect(output).toContain('href="/api/preview/proxy/abc123/docs?x=1&oc_preview_token=preview-secret&oc_client_token=client-secret"');
+    expect(output).toContain('src="/api/preview/proxy/abc123/entry.js?oc_preview_token=preview-secret&oc_url_token=url-secret"');
+    expect(output).toContain('href="/api/preview/proxy/abc123/docs?x=1&oc_preview_token=preview-secret&oc_url_token=url-secret"');
+    expect(output).not.toContain('oc_client_token');
   });
 
   it('rewrites only CSS imports and url references in CSS responses', () => {
@@ -135,6 +136,30 @@ describe('preview body URL rewriting', () => {
     expect(output).toContain('from "/api/preview/proxy/abc123/module.js"');
     expect(output).toContain('const url = "/api/data"');
     expect(output).toContain('fetch("/api/data")');
+  });
+
+  it('adds URL auth tokens to CSS and JavaScript rewritten resources', () => {
+    const cssOutput = rewritePreviewBody({
+      bodyText: '@import "/theme.css"; .hero { background: url(/hero.png); }',
+      kind: 'css',
+      proxyBasePath: '/api/preview/proxy/abc123',
+      targetOrigin: 'http://127.0.0.1:3000',
+      previewToken: 'preview-secret',
+      urlAuthToken: 'url-secret',
+    });
+    const jsOutput = rewritePreviewBody({
+      bodyText: 'import("/entry.js"); import value from "/module.js";',
+      kind: 'javascript',
+      proxyBasePath: '/api/preview/proxy/abc123',
+      targetOrigin: 'http://127.0.0.1:3000',
+      previewToken: 'preview-secret',
+      urlAuthToken: 'url-secret',
+    });
+
+    expect(cssOutput).toContain('@import "/api/preview/proxy/abc123/theme.css?oc_preview_token=preview-secret&oc_url_token=url-secret"');
+    expect(cssOutput).toContain('url(/api/preview/proxy/abc123/hero.png?oc_preview_token=preview-secret&oc_url_token=url-secret)');
+    expect(jsOutput).toContain('import("/api/preview/proxy/abc123/entry.js?oc_preview_token=preview-secret&oc_url_token=url-secret")');
+    expect(jsOutput).toContain('from "/api/preview/proxy/abc123/module.js?oc_preview_token=preview-secret&oc_url_token=url-secret"');
   });
 });
 
@@ -161,8 +186,16 @@ describe('preview redirect URL rewriting', () => {
       proxyBasePath: '/api/preview/proxy/abc123',
       targetOrigin: 'http://127.0.0.1:3000',
       previewToken: 'preview-secret',
-      clientToken: 'client-secret',
-    })).toBe('/api/preview/proxy/abc123/login?next=%2F&oc_preview_token=preview-secret&oc_client_token=client-secret#top');
+      urlAuthToken: 'url-secret',
+    })).toBe('/api/preview/proxy/abc123/login?next=%2F&oc_preview_token=preview-secret&oc_url_token=url-secret#top');
+  });
+
+  it('leaves redirects unchanged when no target origin is provided', () => {
+    expect(rewritePreviewRedirectLocation({
+      location: 'http://localhost:5174/callback',
+      proxyBasePath: '/api/preview/proxy/abc123',
+      previewToken: 'preview-secret',
+    })).toBe('http://localhost:5174/callback');
   });
 });
 

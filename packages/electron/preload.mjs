@@ -24,10 +24,9 @@ const macosMajor = Number.parseInt(macosMajorRaw, 10);
 //    Remote UIs still need it so isDesktopShell() returns true and the
 //    window renders with desktop affordances (DesktopHostSwitcher,
 //    title bar offsets, etc.). Expose unconditionally.
-//  - __TAURI__ is the IPC channel to the main process. Remote pages must
-//    not get it — otherwise any page loaded via DesktopHostSwitcher could
-//    read local files, open apps, relaunch, etc. Expose only on local
-//    pages (loopback / state.localOrigin / file:// for dev).
+//  - __TAURI__ is the IPC channel to the main process. The compatibility
+//    shim is exposed broadly, but privileged commands are gated in main.mjs.
+//    Local-only globals below stay limited to packaged UI / exact localOrigin.
 // Everything driven by localOrigin (home dir, macOS hints) also stays
 // local-only since it leaks info about the Electron host machine.
 const currentOrigin = (() => {
@@ -37,11 +36,9 @@ const currentOrigin = (() => {
     return '';
   }
 })();
-const isLoopbackOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(currentOrigin);
-const isLocalPage = currentOrigin === 'null'
-  || currentOrigin === 'openchamber-ui://app'
-  || isLoopbackOrigin
-  || (localOrigin && currentOrigin === localOrigin);
+const isLocalPage = currentOrigin !== 'null'
+  && (currentOrigin === 'openchamber-ui://app'
+  || (localOrigin && currentOrigin === localOrigin));
 
 // Remote pages need __OPENCHAMBER_LOCAL_ORIGIN__ so the HostSwitcher knows
 // the URL of the Local entry (isDesktopLocalOriginActive() falls back to

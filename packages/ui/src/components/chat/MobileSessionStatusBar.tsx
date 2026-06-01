@@ -564,9 +564,9 @@ export const MobileSessionStatusBar: React.FC<MobileSessionStatusBarProps> = ({
   const outputLimit = (limit && typeof limit.output === 'number' ? limit.output : 0);
   const contextUsage = getContextUsage(contextLimit, outputLimit);
 
-  const handleSessionClick = (sessionId: string) => {
-    setCurrentSession(sessionId);
-    onSessionSwitch?.(sessionId);
+  const handleSessionClick = (session: SessionWithStatus) => {
+    setCurrentSession(session.id, sessionDirectory(session) || null);
+    onSessionSwitch?.(session.id);
     setOpen(false);
   };
 
@@ -645,7 +645,7 @@ export const MobileSessionStatusBar: React.FC<MobileSessionStatusBarProps> = ({
               isCurrent={session.id === currentSessionId}
               getSessionAgentName={getSessionAgentName}
               getSessionTitle={getSessionTitle}
-              onClick={() => handleSessionClick(session.id)}
+              onClick={() => handleSessionClick(session)}
               needsAttention={needsAttention}
             />
           ))

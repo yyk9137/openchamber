@@ -38,6 +38,8 @@ const isUnstagedStatusFile = (file: GitStatus['files'][number]): boolean => {
   return Boolean(workingStatus || indexStatus === '?');
 };
 
+const diffCacheKey = (path: string, staged: boolean): string => staged ? `${path}\u0000staged` : path;
+
 type MobileChangesSurfaceProps = {
   /** When provided, the list header gets a close X that calls this; used when the surface is hosted in MobileSurfaceShell. */
   onClose?: () => void;
@@ -47,9 +49,10 @@ type MobileChangesSurfaceProps = {
    * surface to that diff. Setting it back to null leaves the user on the current internal route.
    */
   initialDiffPath?: string | null;
+  initialDiffStaged?: boolean;
 };
 
-export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onClose, initialDiffPath }) => {
+export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onClose, initialDiffPath, initialDiffStaged = false }) => {
   const { t } = useI18n();
   const { git } = useRuntimeAPIs();
   const currentDirectory = normalizePath(useEffectiveDirectory() ?? null);
@@ -64,8 +67,8 @@ export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onCl
   const getDiff = useGitStore((state) => state.getDiff);
   const setDiff = useGitStore((state) => state.setDiff);
 
-  const [route, setRoute] = React.useState<{ type: 'list' } | { type: 'diff'; path: string }>(
-    () => (initialDiffPath ? { type: 'diff', path: initialDiffPath } : { type: 'list' }),
+  const [route, setRoute] = React.useState<{ type: 'list' } | { type: 'diff'; path: string; staged: boolean }>(
+    () => (initialDiffPath ? { type: 'diff', path: initialDiffPath, staged: initialDiffStaged } : { type: 'list' }),
   );
 
   // Allow the host (MobileApp) to push us into a specific diff when the surface
@@ -73,8 +76,12 @@ export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onCl
   // a different file mid-session.
   React.useEffect(() => {
     if (!initialDiffPath) return;
-    setRoute((current) => (current.type === 'diff' && current.path === initialDiffPath ? current : { type: 'diff', path: initialDiffPath }));
-  }, [initialDiffPath]);
+    setRoute((current) => (
+      current.type === 'diff' && current.path === initialDiffPath && current.staged === initialDiffStaged
+        ? current
+        : { type: 'diff', path: initialDiffPath, staged: initialDiffStaged }
+    ));
+  }, [initialDiffPath, initialDiffStaged]);
   const [syncAction, setSyncAction] = React.useState<SyncAction>(null);
   const [commitAction, setCommitAction] = React.useState<CommitAction>(null);
   const [commitMessage, setCommitMessage] = React.useState('');
@@ -118,7 +125,7 @@ export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onCl
 
   const selectedDiff = useGitStore(React.useCallback((state) => {
     if (!currentDirectory || route.type !== 'diff') return null;
-    return state.directories.get(currentDirectory)?.diffCache.get(route.path) ?? null;
+    return state.directories.get(currentDirectory)?.diffCache.get(diffCacheKey(route.path, route.staged)) ?? null;
   }, [currentDirectory, route]));
 
   const selectedFileEntry = React.useMemo(() => {
@@ -188,17 +195,18 @@ export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onCl
       setDiffLoadError(null);
       return;
     }
-    if (!currentDirectory || getDiff(currentDirectory, route.path)) {
+    const cacheKey = diffCacheKey(route.path, route.staged);
+    if (!currentDirectory || getDiff(currentDirectory, cacheKey)) {
       setDiffLoadError(null);
       return;
     }
 
     let cancelled = false;
     setDiffLoadError(null);
-    void git.getGitFileDiff(currentDirectory, { path: route.path })
+    void git.getGitFileDiff(currentDirectory, { path: route.path, staged: route.staged || undefined })
       .then((response) => {
         if (cancelled) return;
-        setDiff(currentDirectory, route.path, {
+        setDiff(currentDirectory, cacheKey, {
           original: response.original ?? '',
           modified: response.modified ?? '',
           isBinary: response.isBinary,
@@ -274,8 +282,8 @@ export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onCl
     }
   }, [currentDirectory, refreshStatusAndBranches, t]);
 
-  const handleViewChangeDiff = React.useCallback((path: string) => {
-    setRoute({ type: 'diff', path });
+  const handleViewChangeDiff = React.useCallback((path: string, staged = false) => {
+    setRoute({ type: 'diff', path, staged });
   }, []);
 
   const handleRevertFile = React.useCallback(async (filePath: string) => {
@@ -410,7 +418,7 @@ export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onCl
         getActionLabel: (path: string) => t('gitView.changes.unstageFileAria', { path }),
         onActionFile: (path: string) => void moveChangePaths([path], 'unstage'),
         onActionAll: (paths: string[]) => void moveChangePaths(paths, 'unstage'),
-        onViewDiff: (path: string) => handleViewChangeDiff(path),
+        onViewDiff: (path: string) => handleViewChangeDiff(path, true),
         onRevertFile: handleRevertFile,
         showRevertActions: false,
         accent: true,
@@ -427,7 +435,7 @@ export const MobileChangesSurface: React.FC<MobileChangesSurfaceProps> = ({ onCl
         getActionLabel: (path: string) => t('gitView.changes.stageFileAria', { path }),
         onActionFile: (path: string) => void moveChangePaths([path], 'stage'),
         onActionAll: (paths: string[]) => void moveChangePaths(paths, 'stage'),
-        onViewDiff: (path: string) => handleViewChangeDiff(path),
+        onViewDiff: (path: string) => handleViewChangeDiff(path, false),
         onRevertFile: handleRevertFile,
       });
     }

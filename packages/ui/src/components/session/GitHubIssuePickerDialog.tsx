@@ -457,7 +457,7 @@ export function GitHubIssuePickerDialog({
       const instructionsText = await renderMagicPrompt('github.issue.review.instructions');
       const contextText = buildIssueContextText({ repo: issueRes.repo, issue, comments });
 
-      void opencodeClient.withDirectory(sessionDirectory, () => opencodeClient.sendMessage({
+      void opencodeClient.sendMessage({
         id: sessionId,
         providerID,
         modelID,
@@ -468,7 +468,8 @@ export function GitHubIssuePickerDialog({
           { text: instructionsText, synthetic: true },
           { text: contextText, synthetic: true },
         ],
-      })).catch((e) => {
+        directory: sessionDirectory,
+      }).catch((e) => {
         const message = e instanceof Error ? e.message : String(e);
         toast.error(t('session.githubIssuePicker.toast.sendContextFailed'), {
           description: message,

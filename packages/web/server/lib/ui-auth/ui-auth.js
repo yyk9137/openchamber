@@ -8,6 +8,8 @@ import { createUiPasskeys } from './ui-passkeys.js';
 const SESSION_COOKIE_NAME = 'oc_ui_session';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const TRUSTED_DEVICE_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const URL_AUTH_TOKEN_TTL_MS = 60 * 1000;
+const URL_AUTH_TOKEN_PREFIX = 'oc_url_';
 
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const RATE_LIMIT_MAX_ATTEMPTS = Number(process.env.OPENCHAMBER_RATE_LIMIT_MAX_ATTEMPTS) || 10;
@@ -251,17 +253,64 @@ const getBearerTokenFromRequest = (req) => {
     const token = match?.[1]?.trim() || '';
     if (token) return token;
   }
+  return null;
+};
 
-  const queryToken = req?.query?.oc_client_token;
+const getUrlAuthTokenFromRequest = (req) => {
+  const queryToken = req?.query?.oc_url_token;
   let token = Array.isArray(queryToken) ? queryToken[0] : queryToken;
   if (typeof token !== 'string' && typeof req?.url === 'string') {
     try {
-      token = new URL(req.url, 'http://localhost').searchParams.get('oc_client_token') || undefined;
+      token = new URL(req.url, 'http://localhost').searchParams.get('oc_url_token') || undefined;
     } catch {
       token = undefined;
     }
   }
   return typeof token === 'string' && token.trim() ? token.trim() : null;
+};
+
+const getRequestPathname = (req) => {
+  if (typeof req?.path === 'string' && req.path) return req.path;
+  const rawUrl = req?.originalUrl || req?.url;
+  if (typeof rawUrl !== 'string' || !rawUrl) return '';
+  try {
+    return new URL(rawUrl, 'http://localhost').pathname;
+  } catch {
+    return '';
+  }
+};
+
+const isWebSocketUpgrade = (req) => {
+  const upgrade = req?.headers?.upgrade;
+  const upgradeValue = Array.isArray(upgrade) ? upgrade[0] : upgrade;
+  return String(upgradeValue || '').toLowerCase() === 'websocket';
+};
+
+const isUrlAuthReadableHttpPath = (pathname) => {
+  return pathname === '/api/event'
+    || pathname === '/api/global/event'
+    || pathname === '/api/openchamber/events'
+    || pathname === '/api/notifications/stream'
+    || pathname === '/api/fs/raw'
+    || pathname.startsWith('/api/preview/proxy/')
+    || /^\/api\/terminal\/[^/]+\/stream$/.test(pathname)
+    || /^\/api\/projects\/[^/]+\/icon$/.test(pathname);
+};
+
+const isUrlAuthWebSocketPath = (pathname) => {
+  return pathname === '/api/event/ws'
+    || pathname === '/api/global/event/ws'
+    || pathname === '/api/terminal/ws'
+    || pathname.startsWith('/api/preview/proxy/');
+};
+
+const canUseUrlAuthTokenForRequest = (req) => {
+  const method = typeof req?.method === 'string' ? req.method.toUpperCase() : 'GET';
+  const pathname = getRequestPathname(req);
+  if (isWebSocketUpgrade(req)) {
+    return isUrlAuthWebSocketPath(pathname);
+  }
+  return method === 'GET' && isUrlAuthReadableHttpPath(pathname);
 };
 
 const buildCookie = ({
@@ -355,8 +404,42 @@ export const createUiAuth = ({
   requireClientAuth = false,
 } = {}) => {
   const normalizedPassword = normalizePassword(password);
+  const urlAuthTokens = new Map();
 
-  const authenticateClientRequest = async (req) => {
+  const sweepUrlAuthTokens = () => {
+    const now = Date.now();
+    for (const [token, entry] of urlAuthTokens.entries()) {
+      if (!entry || entry.expiresAt <= now) {
+        urlAuthTokens.delete(token);
+      }
+    }
+  };
+
+  const issueUrlAuthTokenForSession = (sessionToken) => {
+    sweepUrlAuthTokens();
+    const token = `${URL_AUTH_TOKEN_PREFIX}${crypto.randomBytes(24).toString('base64url')}`;
+    const expiresAt = Date.now() + URL_AUTH_TOKEN_TTL_MS;
+    urlAuthTokens.set(token, { sessionToken, expiresAt });
+    return { token, expiresAt };
+  };
+
+  const authenticateUrlAuthToken = (req) => {
+    if (!canUseUrlAuthTokenForRequest(req)) return null;
+    const token = getUrlAuthTokenFromRequest(req);
+    if (!token || !token.startsWith(URL_AUTH_TOKEN_PREFIX)) return null;
+    const entry = urlAuthTokens.get(token);
+    if (!entry || entry.expiresAt <= Date.now()) {
+      urlAuthTokens.delete(token);
+      return null;
+    }
+    return { ok: true, sessionToken: entry.sessionToken || 'url:authenticated' };
+  };
+
+  const authenticateClientRequest = async (req, { allowUrlToken = true } = {}) => {
+    if (allowUrlToken) {
+      const urlAuth = authenticateUrlAuthToken(req);
+      if (urlAuth) return urlAuth;
+    }
     const token = getBearerTokenFromRequest(req);
     if (!token || typeof clientAuthController?.authenticateBearerToken !== 'function') {
       return null;
@@ -374,8 +457,22 @@ export const createUiAuth = ({
 
   const clientSessionToken = (clientAuth) => {
     const raw = clientAuth?.sessionToken || clientAuth?.clientId || clientAuth?.id;
+    if (typeof raw === 'string' && (raw.startsWith('client:') || raw.startsWith('url:'))) return raw;
     return typeof raw === 'string' && raw.length > 0 ? `client:${raw}` : 'client:authenticated';
   };
+
+  const clientAuthClientId = (clientAuth) => {
+    const raw = clientAuth?.client?.id || clientAuth?.clientId || clientAuth?.id || clientAuth?.sessionToken;
+    if (typeof raw !== 'string' || raw.length === 0) return null;
+    return raw.startsWith('client:') ? raw.slice('client:'.length) : raw;
+  };
+
+  const clientAuthContext = (clientAuth) => ({
+    type: 'client',
+    token: clientSessionToken(clientAuth),
+    clientId: clientAuthClientId(clientAuth),
+    client: clientAuth?.client || null,
+  });
 
   if (!normalizedPassword) {
     const setSessionCookie = (req, res, token, ttlMs = sessionTtlMs) => {
@@ -414,9 +511,37 @@ export const createUiAuth = ({
       return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
     };
 
+    const requireSessionAuth = async (req, res, next) => {
+      if (!requireClientAuth) {
+        return next();
+      }
+      if (req.method === 'OPTIONS') {
+        return next();
+      }
+      return res.status(401).json({ error: 'UI session authentication required', locked: true });
+    };
+
+    const resolveAuthContext = async (req, res, { allowClientAuth = true, allowUrlToken = true } = {}) => {
+      const cookies = parseCookies(req.headers.cookie);
+      if (cookies[cookieName]) {
+        return { type: 'session', token: cookies[cookieName] };
+      }
+      if (allowClientAuth) {
+        const clientAuth = await authenticateClientRequest(req, { allowUrlToken });
+        if (clientAuth) return clientAuthContext(clientAuth);
+      }
+      if (!requireClientAuth) {
+        const token = await ensureSessionToken(req, res);
+        return { type: 'session', token };
+      }
+      return null;
+    };
+
     return {
       enabled: false,
       requireAuth,
+      requireSessionAuth,
+      resolveAuthContext,
       handleSessionStatus: async (req, res) => {
         if (requireClientAuth) {
           const clientAuth = await authenticateClientRequest(req);
@@ -429,6 +554,19 @@ export const createUiAuth = ({
       },
       handleSessionCreate: (_req, res) => {
         res.status(400).json({ error: 'UI password not configured' });
+      },
+      handleUrlAuthToken: async (req, res) => {
+        const clientAuth = await authenticateClientRequest(req, { allowUrlToken: false });
+        if (clientAuth) {
+          res.setHeader('Cache-Control', 'no-store');
+          return res.json(issueUrlAuthTokenForSession(clientSessionToken(clientAuth)));
+        }
+        if (requireClientAuth) {
+          return res.status(401).json({ error: 'Client authentication required', locked: true, clientAuthRequired: true });
+        }
+        const sessionToken = await ensureSessionToken(req, res);
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json(issueUrlAuthTokenForSession(sessionToken));
       },
       handlePasskeyStatus: (_req, res) => {
         res.json({ enabled: false, hasPasskeys: false, passkeyCount: 0, rpID: null });
@@ -487,6 +625,7 @@ export const createUiAuth = ({
   const rotateJwtSecret = () => {
     const nextSecret = crypto.randomBytes(32).toString('hex');
     jwtSecret = persistJwtSecret(nextSecret);
+    urlAuthTokens.clear();
     rebuildPasskeyController();
   };
 
@@ -565,7 +704,7 @@ export const createUiAuth = ({
   const respondUnauthorized = (req, res) => {
     res.status(401);
     const acceptsJson = req.headers.accept?.includes('application/json');
-    if (acceptsJson || req.path.startsWith('/api')) {
+    if (acceptsJson || req.path?.startsWith('/api')) {
       res.json({ error: 'UI authentication required', locked: true });
     } else {
       res.type('text/plain').send('Authentication required');
@@ -588,6 +727,18 @@ export const createUiAuth = ({
     return respondUnauthorized(req, res);
   };
 
+  const requireSessionAuth = async (req, res, next) => {
+    if (req.method === 'OPTIONS') {
+      return next();
+    }
+    const token = getTokenFromRequest(req);
+    if (await isSessionValid(token)) {
+      return next();
+    }
+    clearSessionCookie(req, res);
+    return respondUnauthorized(req, res);
+  };
+
   const handleSessionStatus = async (req, res) => {
     const token = getTokenFromRequest(req);
     if (await isSessionValid(token)) {
@@ -601,6 +752,35 @@ export const createUiAuth = ({
     }
     clearSessionCookie(req, res);
     res.status(401).json({ authenticated: false, locked: true });
+  };
+
+  const resolveAuthenticatedSessionToken = async (req, { allowUrlToken = true } = {}) => {
+    const token = getTokenFromRequest(req);
+    if (await isSessionValid(token)) {
+      return token;
+    }
+    const clientAuth = await authenticateClientRequest(req, { allowUrlToken });
+    return clientAuth ? clientSessionToken(clientAuth) : null;
+  };
+
+  const resolveAuthContext = async (req, _res, { allowClientAuth = true, allowUrlToken = true } = {}) => {
+    const token = getTokenFromRequest(req);
+    if (await isSessionValid(token)) {
+      return { type: 'session', token };
+    }
+    if (!allowClientAuth) return null;
+    const clientAuth = await authenticateClientRequest(req, { allowUrlToken });
+    return clientAuth ? clientAuthContext(clientAuth) : null;
+  };
+
+  const handleUrlAuthToken = async (req, res) => {
+    const sessionToken = await resolveAuthenticatedSessionToken(req, { allowUrlToken: false });
+    if (!sessionToken) {
+      clearSessionCookie(req, res);
+      return respondUnauthorized(req, res);
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json(issueUrlAuthTokenForSession(sessionToken));
   };
 
   const handleSessionCreate = async (req, res) => {
@@ -757,8 +937,11 @@ export const createUiAuth = ({
   return {
     enabled: true,
     requireAuth,
+    requireSessionAuth,
+    resolveAuthContext,
     handleSessionStatus,
     handleSessionCreate,
+    handleUrlAuthToken,
     handlePasskeyStatus,
     handlePasskeyRegistrationOptions,
     handlePasskeyRegistrationVerify,
@@ -768,10 +951,7 @@ export const createUiAuth = ({
     handlePasskeyRevoke,
     handleResetAuth,
     ensureSessionToken: async (req, _res) => {
-      const token = getTokenFromRequest(req);
-      if (await isSessionValid(token)) return token;
-      const clientAuth = await authenticateClientRequest(req);
-      return clientAuth ? clientSessionToken(clientAuth) : null;
+      return resolveAuthenticatedSessionToken(req);
     },
     dispose,
   };

@@ -94,7 +94,10 @@ export const PendingChangesBar: React.FC = React.memo(() => {
 
         // Dedicated mobile root: open the per-file diff inside the mobile Changes surface.
         if (mobileActions) {
-            mobileActions.openChanges({ diffPath: file.relativePath });
+            mobileActions.openChanges({
+                diffPath: file.relativePath,
+                staged: file.hasStagedChanges && !file.hasWorkingChanges,
+            });
             setIsExpanded(false);
             return;
         }

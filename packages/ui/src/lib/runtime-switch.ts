@@ -1,4 +1,4 @@
-import { setRuntimeBearerToken } from '@/lib/runtime-auth';
+import { refreshRuntimeUrlAuthToken, setRuntimeBearerToken } from '@/lib/runtime-auth';
 import { configureRuntimeUrlResolver } from '@/lib/runtime-url';
 
 export type RuntimeEndpointChangedDetail = {
@@ -85,6 +85,7 @@ export const switchRuntimeEndpoint = (options: { apiBaseUrl: string; clientToken
   }
   configureRuntimeUrlResolver({ apiBaseUrl, realtimeBaseUrl: apiBaseUrl });
   setRuntimeBearerToken(options.clientToken || null);
+  void refreshRuntimeUrlAuthToken(apiBaseUrl).catch(() => {});
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent<RuntimeEndpointChangedDetail>(RUNTIME_ENDPOINT_CHANGED_EVENT, {
       detail: { apiBaseUrl, previousApiBaseUrl, runtimeKey, previousRuntimeKey },

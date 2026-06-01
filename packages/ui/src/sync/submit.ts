@@ -82,7 +82,7 @@ export function usePromptSubmit() {
       try {
         if (input.command) {
           // Slash command
-          await opencodeClient.withDirectory(directory, () => opencodeClient.sendCommand({
+          await opencodeClient.sendCommand({
             id: input.sessionID,
             command: input.command?.name ?? "",
             arguments: input.command?.arguments ?? "",
@@ -92,11 +92,11 @@ export function usePromptSubmit() {
             variant: input.variant,
             files: input.images,
             messageId: messageID,
-          })
-          ).then(() => undefined)
+            directory,
+          }).then(() => undefined)
         } else {
           // Regular prompt
-          await opencodeClient.withDirectory(directory, () => opencodeClient.sendMessage({
+          await opencodeClient.sendMessage({
             id: input.sessionID,
             agent: input.agent,
             providerID: input.model.providerID,
@@ -105,8 +105,8 @@ export function usePromptSubmit() {
             text: input.text,
             files: input.images,
             variant: input.variant,
-          })
-          ).then(() => undefined)
+            directory,
+          }).then(() => undefined)
         }
         return true
       } catch (error) {

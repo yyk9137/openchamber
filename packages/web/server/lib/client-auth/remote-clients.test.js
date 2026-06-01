@@ -82,4 +82,33 @@ describe('remote client auth runtime', () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('keeps the token store private on disk', async () => {
+    const { dir, runtime } = await createRuntime();
+    try {
+      await runtime.createClient({ label: 'Laptop' });
+      const stat = await fs.stat(path.join(dir, 'remote-clients.json'));
+      expect(stat.mode & 0o777).toBe(0o600);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not resurrect revoked clients after concurrent auth traffic', async () => {
+    const { dir, runtime } = await createRuntime();
+    try {
+      const created = await runtime.createClient({ label: 'Laptop' });
+      await Promise.all([
+        ...Array.from({ length: 20 }, () => runtime.authenticateBearerToken(created.token)),
+        runtime.revokeClient(created.client.id),
+      ]);
+
+      expect(await runtime.authenticateBearerToken(created.token)).toBe(null);
+      const clients = await runtime.listClients();
+      expect(clients).toHaveLength(1);
+      expect(typeof clients[0].revokedAt).toBe('string');
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });

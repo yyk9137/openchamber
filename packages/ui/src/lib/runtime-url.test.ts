@@ -5,7 +5,7 @@ import {
   getRuntimeUrlResolver,
   setRuntimeUrlResolver,
 } from './runtime-url';
-import { setRuntimeBearerToken } from './runtime-auth';
+import { setRuntimeBearerToken, setRuntimeUrlAuthToken } from './runtime-auth';
 
 describe('createRuntimeUrlResolver', () => {
   test('preserves relative same-origin URLs by default', () => {
@@ -63,21 +63,34 @@ describe('createRuntimeUrlResolver', () => {
     }
   });
 
-  test('adds client token query to realtime and authenticated asset URLs only', () => {
+  test('adds short-lived URL auth query to realtime and authenticated asset URLs only', () => {
     setRuntimeBearerToken('oc_client_secret');
+    setRuntimeUrlAuthToken('oc_url_secret', Date.now() + 60_000);
     try {
       const urls = createRuntimeUrlResolver({ apiBaseUrl: 'https://api.example' });
 
       expect(urls.api('/api/config/settings')).toBe('https://api.example/api/config/settings');
       expect(urls.authenticatedAsset('/api/projects/p1/icon', { v: 123 })).toBe(
-        'https://api.example/api/projects/p1/icon?v=123&oc_client_token=oc_client_secret',
+        'https://api.example/api/projects/p1/icon?v=123&oc_url_token=oc_url_secret',
       );
       expect(urls.sse('/api/openchamber/events')).toBe(
-        'https://api.example/api/openchamber/events?oc_client_token=oc_client_secret',
+        'https://api.example/api/openchamber/events?oc_url_token=oc_url_secret',
       );
       expect(urls.websocket('/api/global/event/ws', { lastEventId: 'evt-1' })).toBe(
-        'wss://api.example/api/global/event/ws?lastEventId=evt-1&oc_client_token=oc_client_secret',
+        'wss://api.example/api/global/event/ws?lastEventId=evt-1&oc_url_token=oc_url_secret',
       );
+    } finally {
+      setRuntimeBearerToken(null);
+    }
+  });
+
+  test('does not put the long-lived client token in URLs', () => {
+    setRuntimeBearerToken('oc_client_secret');
+    try {
+      const urls = createRuntimeUrlResolver({ apiBaseUrl: 'https://api.example' });
+      expect(urls.sse('/api/openchamber/events')).toBe('https://api.example/api/openchamber/events');
+      expect(urls.websocket('/api/global/event/ws')).toBe('wss://api.example/api/global/event/ws');
+      expect(urls.authenticatedAsset('/api/projects/p1/icon')).toBe('https://api.example/api/projects/p1/icon');
     } finally {
       setRuntimeBearerToken(null);
     }

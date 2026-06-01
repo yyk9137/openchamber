@@ -64,6 +64,44 @@ describe('ui auth client credential seam', () => {
 
     expect(called).toBe(true);
     expect(await auth.ensureSessionToken(req, res)).toBe('client:device-1');
+    expect(await auth.resolveAuthContext(req, res, { allowUrlToken: false })).toMatchObject({
+      type: 'client',
+      clientId: 'device-1',
+      token: 'client:device-1',
+    });
+  });
+
+  it('does not accept bearer client credentials for UI-session-only auth', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({
+      password: 'secret',
+      clientAuthController: {
+        authenticateBearerToken: async (token) => token === 'client-token' ? { ok: true, clientId: 'device-1' } : null,
+      },
+    });
+
+    const clientReq = { method: 'GET', path: '/api/client-auth/clients', headers: { authorization: 'Bearer client-token' } };
+    const clientRes = createResponse();
+    let clientCalled = false;
+    await auth.requireSessionAuth(clientReq, clientRes, () => {
+      clientCalled = true;
+    });
+    expect(clientCalled).toBe(false);
+    expect(clientRes.statusCode).toBe(401);
+
+    const loginReq = { method: 'POST', headers: {}, body: { password: 'secret' } };
+    const loginRes = createResponse();
+    await auth.handleSessionCreate(loginReq, loginRes);
+    const sessionCookie = String(loginRes.getHeader('set-cookie') || '').split(';', 1)[0];
+    expect(sessionCookie.startsWith('oc_ui_session=')).toBe(true);
+
+    const sessionReq = { method: 'GET', path: '/api/client-auth/clients', headers: { cookie: sessionCookie } };
+    const sessionRes = createResponse();
+    let sessionCalled = false;
+    await auth.requireSessionAuth(sessionReq, sessionRes, () => {
+      sessionCalled = true;
+    });
+    expect(sessionCalled).toBe(true);
   });
 
   it('can require bearer client credentials when UI password is disabled', async () => {
@@ -105,6 +143,62 @@ describe('ui auth client credential seam', () => {
     await auth.handleSessionStatus(req, res);
 
     expect(res.body).toEqual({ authenticated: true, scope: 'client' });
+  });
+
+  it('exchanges bearer credentials for short-lived URL auth tokens', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({
+      password: 'secret',
+      clientAuthController: {
+        authenticateBearerToken: async (token) => token === 'client-token' ? { ok: true, clientId: 'device-1' } : null,
+      },
+    });
+
+    const oldQueryReq = { method: 'GET', path: '/api/config/settings', url: '/api/config/settings?oc_client_token=client-token', headers: { accept: 'application/json' } };
+    const oldQueryRes = createResponse();
+    let oldQueryCalled = false;
+    await auth.requireAuth(oldQueryReq, oldQueryRes, () => {
+      oldQueryCalled = true;
+    });
+    expect(oldQueryCalled).toBe(false);
+    expect(oldQueryRes.statusCode).toBe(401);
+
+    const mintReq = { method: 'POST', path: '/auth/url-token', headers: { authorization: 'Bearer client-token', accept: 'application/json' } };
+    const mintRes = createResponse();
+    await auth.handleUrlAuthToken(mintReq, mintRes);
+    expect(typeof mintRes.body.token).toBe('string');
+    expect(mintRes.body.token.startsWith('oc_url_')).toBe(true);
+    expect(mintRes.body.expiresAt).toBeGreaterThan(Date.now());
+    expect(mintRes.getHeader('cache-control')).toBe('no-store');
+
+    const urlToken = mintRes.body.token;
+    const urlReq = { method: 'GET', path: '/api/fs/raw', url: `/api/fs/raw?path=%2Ftmp%2Fimage.png&oc_url_token=${encodeURIComponent(urlToken)}`, headers: {} };
+    const urlRes = createResponse();
+    let urlCalled = false;
+    await auth.requireAuth(urlReq, urlRes, () => {
+      urlCalled = true;
+    });
+    expect(urlCalled).toBe(true);
+    expect(await auth.ensureSessionToken(urlReq, urlRes)).toBe('client:device-1');
+    expect(await auth.resolveAuthContext(urlReq, urlRes, { allowUrlToken: false })).toBe(null);
+
+    const arbitraryGetReq = { method: 'GET', path: '/api/config/settings', url: `/api/config/settings?oc_url_token=${encodeURIComponent(urlToken)}`, headers: { accept: 'application/json' } };
+    const arbitraryGetRes = createResponse();
+    let arbitraryGetCalled = false;
+    await auth.requireAuth(arbitraryGetReq, arbitraryGetRes, () => {
+      arbitraryGetCalled = true;
+    });
+    expect(arbitraryGetCalled).toBe(false);
+    expect(arbitraryGetRes.statusCode).toBe(401);
+
+    const postReq = { method: 'POST', path: '/api/config/settings', url: `/api/config/settings?oc_url_token=${encodeURIComponent(urlToken)}`, headers: { accept: 'application/json' } };
+    const postRes = createResponse();
+    let postCalled = false;
+    await auth.requireAuth(postReq, postRes, () => {
+      postCalled = true;
+    });
+    expect(postCalled).toBe(false);
+    expect(postRes.statusCode).toBe(401);
   });
 
   it('issues desktop client tokens with the UI session expiry', async () => {

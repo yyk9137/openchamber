@@ -566,7 +566,7 @@ export function NewWorktreeDialog({
         comments: commentsRes.comments ?? [],
       });
 
-      await opencodeClient.withDirectory(args.directory, () => opencodeClient.sendMessage({
+      await opencodeClient.sendMessage({
         id: args.sessionId,
         providerID,
         modelID,
@@ -577,7 +577,8 @@ export function NewWorktreeDialog({
           { text: instructionsText, synthetic: true },
           { text: contextText, synthetic: true },
         ],
-      }));
+        directory: args.directory,
+      });
 
       toast.success(t('session.newWorktree.toast.sessionFromIssue'));
       return;
@@ -602,7 +603,7 @@ export function NewWorktreeDialog({
       const instructionsText = await renderMagicPrompt('github.pr.review.instructions');
       const contextText = buildPullRequestContextText(prContext);
 
-      await opencodeClient.withDirectory(args.directory, () => opencodeClient.sendMessage({
+      await opencodeClient.sendMessage({
         id: args.sessionId,
         providerID,
         modelID,
@@ -613,7 +614,8 @@ export function NewWorktreeDialog({
           { text: instructionsText, synthetic: true },
           { text: contextText, synthetic: true },
         ],
-      }));
+        directory: args.directory,
+      });
 
       toast.success(t('session.newWorktree.toast.sessionFromPr'));
     }

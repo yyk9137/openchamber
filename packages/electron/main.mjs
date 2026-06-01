@@ -1118,7 +1118,7 @@ const buildInitScript = (localOrigin, bootOutcome, apiBaseUrl = '', clientToken 
   const outcome = JSON.stringify(bootOutcome ?? null);
   return [
     '(function(){',
-    `try{var __oc_local=${local};var __oc_api=${apiBase};var __oc_packaged=${packagedOrigin};var __oc_origin=window.location&&window.location.origin||'';var __oc_is_packaged=__oc_origin===__oc_packaged;var __oc_is_local=__oc_local&&__oc_origin===new URL(__oc_local).origin;var __oc_is_api=__oc_api&&__oc_origin===new URL(__oc_api).origin;window.__OPENCHAMBER_MACOS_MAJOR__=${macVersion};window.__OPENCHAMBER_LOCAL_ORIGIN__=__oc_local;window.__OPENCHAMBER_API_BASE_URL__=__oc_api;if(__oc_is_local||__oc_is_packaged){window.__OPENCHAMBER_HOME__=${home};}if((__oc_is_api||__oc_is_packaged)&&${token}){window.__OPENCHAMBER_CLIENT_TOKEN__=${token};}var __oc_bo=${outcome};if(__oc_bo){window.__OPENCHAMBER_DESKTOP_BOOT_OUTCOME__=__oc_bo;}}catch(_e){}`,
+    `try{var __oc_local=${local};var __oc_api=${apiBase};var __oc_packaged=${packagedOrigin};var __oc_origin=window.location&&window.location.origin||'';var __oc_is_packaged=__oc_origin===__oc_packaged;var __oc_is_local=__oc_local&&__oc_origin===new URL(__oc_local).origin;window.__OPENCHAMBER_MACOS_MAJOR__=${macVersion};window.__OPENCHAMBER_LOCAL_ORIGIN__=__oc_local;window.__OPENCHAMBER_API_BASE_URL__=__oc_api;if(__oc_is_local||__oc_is_packaged){window.__OPENCHAMBER_HOME__=${home};}if((__oc_is_local||__oc_is_packaged)&&${token}){window.__OPENCHAMBER_CLIENT_TOKEN__=${token};}var __oc_bo=${outcome};if(__oc_bo){window.__OPENCHAMBER_DESKTOP_BOOT_OUTCOME__=__oc_bo;}}catch(_e){}`,
     '}())',
   ].join('');
 };
@@ -1763,13 +1763,17 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
   const isAllowedNavigationUrl = (raw) => {
     try {
       const url = new URL(raw);
-      if (url.protocol === 'file:' || url.protocol === 'about:' || url.protocol === 'devtools:') return true;
+      if (url.protocol === 'devtools:') return true;
       if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-      const hostname = url.hostname;
-      if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
       if (state.localOrigin) {
         try {
           if (new URL(state.localOrigin).origin === url.origin) return true;
+        } catch {
+        }
+      }
+      if (state.sidecarUrl) {
+        try {
+          if (new URL(state.sidecarUrl).origin === url.origin) return true;
         } catch {
         }
       }
@@ -3541,15 +3545,19 @@ const isLocalSender = (webContents) => {
   try {
     const raw = typeof webContents?.getURL === 'function' ? webContents.getURL() : '';
     if (!raw) return false;
-    if (raw.startsWith('file://') || raw === 'about:blank') return true;
     const url = new URL(raw);
     if (url.protocol === `${UI_PROTOCOL}:` && url.hostname === 'app') return true;
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
-    const hostname = url.hostname;
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
     if (state.localOrigin) {
       try {
         const allowed = new URL(state.localOrigin);
+        if (allowed.origin === url.origin) return true;
+      } catch {
+      }
+    }
+    if (state.sidecarUrl) {
+      try {
+        const allowed = new URL(state.sidecarUrl);
         if (allowed.origin === url.origin) return true;
       } catch {
       }

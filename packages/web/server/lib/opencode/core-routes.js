@@ -302,14 +302,53 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     normalizeTunnelSessionTtlMs,
   } = dependencies;
 
-  const runWithUiAuth = async (req, res, next, handler) => {
+  const runWithUiAuth = async (req, res, next, handler, options = {}) => {
     try {
-      await uiAuthController.requireAuth(req, res, async () => {
+      const requireAuth = options.sessionOnly === true && typeof uiAuthController.requireSessionAuth === 'function'
+        ? uiAuthController.requireSessionAuth
+        : uiAuthController.requireAuth;
+      await requireAuth(req, res, async () => {
         await handler();
       });
     } catch (error) {
       next(error);
     }
+  };
+
+  const runWithClientManagementAuth = async (req, res, next, handler) => {
+    try {
+      if (typeof uiAuthController.resolveAuthContext === 'function') {
+        const context = await uiAuthController.resolveAuthContext(req, res, {
+          allowClientAuth: true,
+          allowUrlToken: false,
+        });
+        if (context?.type === 'session' || context?.type === 'client') {
+          await handler(context);
+          return;
+        }
+      }
+
+      await runWithUiAuth(req, res, next, async () => {
+        await handler({ type: 'session' });
+      }, { sessionOnly: true });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  const clientIdFromAuthContext = (context) => {
+    const raw = context?.client?.id || context?.clientId;
+    return typeof raw === 'string' && raw.length > 0 ? raw : null;
+  };
+
+  const clientRecordFromAuthContext = async (context) => {
+    if (context?.client && typeof context.client === 'object') {
+      return context.client;
+    }
+    const clientId = clientIdFromAuthContext(context);
+    if (!clientId) return null;
+    const clients = await remoteClientAuthRuntime.listClients();
+    return clients.find((client) => client.id === clientId) || null;
   };
 
   const requireApiAuth = async (req, res, next) => {
@@ -346,6 +385,14 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     return uiAuthController.handleSessionCreate(req, res);
   });
 
+  app.post('/auth/url-token', async (req, res, next) => {
+    try {
+      await uiAuthController.handleUrlAuthToken(req, res);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/auth/passkey/status', (req, res) => {
     const requestScope = tunnelAuthController.classifyRequestScope(req);
     if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
@@ -376,7 +423,7 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       return res.status(403).json({ error: 'Passkey setup is disabled for tunnel scope', tunnelLocked: true });
     }
     try {
-      await uiAuthController.requireAuth(req, res, async () => {
+      await uiAuthController.requireSessionAuth(req, res, async () => {
         await uiAuthController.handlePasskeyRegistrationOptions(req, res);
       });
     } catch (error) {
@@ -390,7 +437,7 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       return res.status(403).json({ error: 'Passkey setup is disabled for tunnel scope', tunnelLocked: true });
     }
     try {
-      await uiAuthController.requireAuth(req, res, async () => {
+      await uiAuthController.requireSessionAuth(req, res, async () => {
         await uiAuthController.handlePasskeyRegistrationVerify(req, res);
       });
     } catch (error) {
@@ -404,7 +451,7 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       return res.status(403).json({ error: 'Passkey management is disabled for tunnel scope', tunnelLocked: true });
     }
     try {
-      await uiAuthController.requireAuth(req, res, async () => {
+      await uiAuthController.requireSessionAuth(req, res, async () => {
         await uiAuthController.handlePasskeyList(req, res);
       });
     } catch (error) {
@@ -418,7 +465,7 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       return res.status(403).json({ error: 'Passkey management is disabled for tunnel scope', tunnelLocked: true });
     }
     try {
-      await uiAuthController.requireAuth(req, res, async () => {
+      await uiAuthController.requireSessionAuth(req, res, async () => {
         await uiAuthController.handlePasskeyRevoke(req, res);
       });
     } catch (error) {
@@ -432,7 +479,7 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       return res.status(403).json({ error: 'Global sign-out is disabled for tunnel scope', tunnelLocked: true });
     }
     try {
-      await uiAuthController.requireAuth(req, res, async () => {
+      await uiAuthController.requireSessionAuth(req, res, async () => {
         await uiAuthController.handleResetAuth(req, res);
       });
     } catch (error) {
@@ -441,7 +488,11 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
   });
 
   app.get('/api/client-auth/clients', async (req, res, next) => {
-    await runWithUiAuth(req, res, next, async () => {
+    await runWithClientManagementAuth(req, res, next, async (authContext) => {
+      if (authContext.type === 'client') {
+        const client = await clientRecordFromAuthContext(authContext);
+        return res.json({ clients: client ? [client] : [] });
+      }
       const clients = await remoteClientAuthRuntime.listClients();
       res.json({ clients });
     });
@@ -456,11 +507,17 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
       });
       res.setHeader('Cache-Control', 'no-store');
       res.status(201).json(result);
-    });
+    }, { sessionOnly: true });
   });
 
   app.delete('/api/client-auth/clients/:id', async (req, res, next) => {
-    await runWithUiAuth(req, res, next, async () => {
+    await runWithClientManagementAuth(req, res, next, async (authContext) => {
+      if (authContext.type === 'client') {
+        const clientId = clientIdFromAuthContext(authContext);
+        if (!clientId || clientId !== req.params?.id) {
+          return res.status(403).json({ revoked: false, error: 'Client tokens can only revoke themselves' });
+        }
+      }
       const result = await remoteClientAuthRuntime.revokeClient(req.params?.id);
       if (!result.revoked) {
         return res.status(404).json({ revoked: false, error: 'Client not found' });
@@ -473,7 +530,7 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     await runWithUiAuth(req, res, next, async () => {
       const result = await remoteClientAuthRuntime.purgeRevokedClients();
       res.json(result);
-    });
+    }, { sessionOnly: true });
   });
 
   app.get('/connect', async (req, res) => {

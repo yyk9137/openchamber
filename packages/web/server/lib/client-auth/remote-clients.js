@@ -2,6 +2,7 @@ const STORE_VERSION = 1;
 const TOKEN_PREFIX = 'oc_client_';
 const TOKEN_BYTES = 32;
 const MAX_LABEL_LENGTH = 80;
+const LAST_USED_WRITE_INTERVAL_MS = 60_000;
 
 const normalizeLabel = (value) => {
   if (typeof value !== 'string') return 'Remote client';
@@ -45,6 +46,21 @@ export const createRemoteClientAuthRuntime = ({ fsPromises, path, crypto, storeP
   const nowIso = () => new Date().toISOString();
   const generateId = () => crypto.randomBytes(12).toString('hex');
   const generateToken = () => `${TOKEN_PREFIX}${crypto.randomBytes(TOKEN_BYTES).toString('base64url')}`;
+  let storeMutationQueue = Promise.resolve();
+
+  const withStoreMutation = async (fn) => {
+    const previous = storeMutationQueue;
+    let release;
+    storeMutationQueue = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  };
 
   const normalizeStore = (payload) => ({
     version: STORE_VERSION,
@@ -77,8 +93,11 @@ export const createRemoteClientAuthRuntime = ({ fsPromises, path, crypto, storeP
   };
 
   const writeStore = async (store) => {
-    await fsPromises.mkdir(path.dirname(storePath), { recursive: true });
-    await fsPromises.writeFile(storePath, JSON.stringify(normalizeStore(store), null, 2));
+    await fsPromises.mkdir(path.dirname(storePath), { recursive: true, mode: 0o700 });
+    await fsPromises.writeFile(storePath, JSON.stringify(normalizeStore(store), null, 2), { mode: 0o600 });
+    if (typeof fsPromises.chmod === 'function') {
+      await fsPromises.chmod(storePath, 0o600).catch(() => {});
+    }
   };
 
   const publicClient = (client) => ({
@@ -92,68 +111,82 @@ export const createRemoteClientAuthRuntime = ({ fsPromises, path, crypto, storeP
   });
 
   const listClients = async () => {
-    const store = await readStore();
-    return store.clients.map(publicClient);
+    return withStoreMutation(async () => {
+      const store = await readStore();
+      return store.clients.map(publicClient);
+    });
   };
 
   const createClient = async ({ label, expiresAt, clientKind, dedupeKey } = {}) => {
-    const store = await readStore();
-    const normalizedDedupeKey = normalizeOptionalString(dedupeKey);
-    const token = generateToken();
-    const client = {
-      id: generateId(),
-      label: normalizeLabel(label),
-      tokenHash: hashToken(token),
-      createdAt: nowIso(),
-      lastUsedAt: null,
-      revokedAt: null,
-      expiresAt: normalizeTimestamp(expiresAt),
-      clientKind: normalizeOptionalString(clientKind),
-      dedupeKey: normalizedDedupeKey,
-    };
-    if (normalizedDedupeKey) {
-      store.clients = store.clients.filter((entry) => entry.dedupeKey !== normalizedDedupeKey);
-    }
-    store.clients.push(client);
-    await writeStore(store);
-    return { client: publicClient(client), token };
+    return withStoreMutation(async () => {
+      const store = await readStore();
+      const normalizedDedupeKey = normalizeOptionalString(dedupeKey);
+      const token = generateToken();
+      const client = {
+        id: generateId(),
+        label: normalizeLabel(label),
+        tokenHash: hashToken(token),
+        createdAt: nowIso(),
+        lastUsedAt: null,
+        revokedAt: null,
+        expiresAt: normalizeTimestamp(expiresAt),
+        clientKind: normalizeOptionalString(clientKind),
+        dedupeKey: normalizedDedupeKey,
+      };
+      if (normalizedDedupeKey) {
+        store.clients = store.clients.filter((entry) => entry.dedupeKey !== normalizedDedupeKey);
+      }
+      store.clients.push(client);
+      await writeStore(store);
+      return { client: publicClient(client), token };
+    });
   };
 
   const revokeClient = async (id) => {
     if (typeof id !== 'string' || id.trim().length === 0) {
       return { revoked: false };
     }
-    const store = await readStore();
-    const client = store.clients.find((entry) => entry.id === id);
-    if (!client) return { revoked: false };
-    if (!client.revokedAt) client.revokedAt = nowIso();
-    await writeStore(store);
-    return { revoked: true, client: publicClient(client) };
+    return withStoreMutation(async () => {
+      const store = await readStore();
+      const client = store.clients.find((entry) => entry.id === id);
+      if (!client) return { revoked: false };
+      if (!client.revokedAt) client.revokedAt = nowIso();
+      await writeStore(store);
+      return { revoked: true, client: publicClient(client) };
+    });
   };
 
   const purgeRevokedClients = async () => {
-    const store = await readStore();
-    const before = store.clients.length;
-    store.clients = store.clients.filter((entry) => !entry.revokedAt);
-    const purged = before - store.clients.length;
-    if (purged > 0) {
-      await writeStore(store);
-    }
-    return { purged };
+    return withStoreMutation(async () => {
+      const store = await readStore();
+      const before = store.clients.length;
+      store.clients = store.clients.filter((entry) => !entry.revokedAt);
+      const purged = before - store.clients.length;
+      if (purged > 0) {
+        await writeStore(store);
+      }
+      return { purged };
+    });
   };
 
   const authenticateBearerToken = async (token) => {
     if (typeof token !== 'string' || !token.startsWith(TOKEN_PREFIX)) {
       return null;
     }
-    const tokenHash = hashToken(token);
-    const store = await readStore();
-    const client = store.clients.find((entry) => !entry.revokedAt && constantTimeEqual(entry.tokenHash, tokenHash, crypto));
-    if (!client) return null;
-    if (client.expiresAt && Date.parse(client.expiresAt) <= Date.now()) return null;
-    client.lastUsedAt = nowIso();
-    await writeStore(store);
-    return { ok: true, clientId: client.id, sessionToken: client.id, client: publicClient(client) };
+    return withStoreMutation(async () => {
+      const tokenHash = hashToken(token);
+      const store = await readStore();
+      const client = store.clients.find((entry) => !entry.revokedAt && constantTimeEqual(entry.tokenHash, tokenHash, crypto));
+      if (!client) return null;
+      if (client.expiresAt && Date.parse(client.expiresAt) <= Date.now()) return null;
+      const now = Date.now();
+      const lastUsedAt = Date.parse(client.lastUsedAt || '');
+      if (!Number.isFinite(lastUsedAt) || now - lastUsedAt >= LAST_USED_WRITE_INTERVAL_MS) {
+        client.lastUsedAt = new Date(now).toISOString();
+        await writeStore(store);
+      }
+      return { ok: true, clientId: client.id, sessionToken: client.id, client: publicClient(client) };
+    });
   };
 
   return {

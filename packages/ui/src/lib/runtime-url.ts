@@ -1,4 +1,4 @@
-import { getRuntimeBearerTokenSync } from '@/lib/runtime-auth';
+import { getRuntimeUrlAuthTokenSync } from '@/lib/runtime-auth';
 
 type QueryValue = string | number | boolean | null | undefined;
 
@@ -81,32 +81,18 @@ const buildHttpUrl = (baseUrl: string, path: string, query?: RuntimeUrlQuery): s
   return url.toString();
 };
 
-const withRealtimeAuth = (urlValue: string): string => {
-  const token = getRuntimeBearerTokenSync();
+const withUrlAuth = (urlValue: string): string => {
+  const token = getRuntimeUrlAuthTokenSync();
   if (!token) return urlValue;
 
   if (ABSOLUTE_URL_PATTERN.test(urlValue)) {
     const url = new URL(urlValue);
-    url.searchParams.set('oc_client_token', token);
+    url.searchParams.set('oc_url_token', token);
     return url.toString();
   }
 
   const separator = urlValue.includes('?') ? '&' : '?';
-  return `${urlValue}${separator}oc_client_token=${encodeURIComponent(token)}`;
-};
-
-const withQueryAuth = (urlValue: string): string => {
-  const token = getRuntimeBearerTokenSync();
-  if (!token) return urlValue;
-
-  if (ABSOLUTE_URL_PATTERN.test(urlValue)) {
-    const url = new URL(urlValue);
-    url.searchParams.set('oc_client_token', token);
-    return url.toString();
-  }
-
-  const separator = urlValue.includes('?') ? '&' : '?';
-  return `${urlValue}${separator}oc_client_token=${encodeURIComponent(token)}`;
+  return `${urlValue}${separator}oc_url_token=${encodeURIComponent(token)}`;
 };
 
 const toWebSocketUrl = (candidate: string, config: RuntimeUrlConfig): string => {
@@ -129,12 +115,12 @@ export const createRuntimeUrlResolver = (config: RuntimeUrlConfig = {}): Runtime
 
   return {
     api: http,
-    authenticatedAsset: (path, query) => withQueryAuth(http(path, query)),
+    authenticatedAsset: (path, query) => withUrlAuth(http(path, query)),
     auth: http,
     health: (query) => http('/health', query),
     rawFile: (path, options) => http('/api/fs/raw', { path, download: options?.download === true ? true : undefined }),
-    sse: (path, query) => withRealtimeAuth(realtime(path, query)),
-    websocket: (path, query) => toWebSocketUrl(withRealtimeAuth(realtime(path, query)), config),
+    sse: (path, query) => withUrlAuth(realtime(path, query)),
+    websocket: (path, query) => toWebSocketUrl(withUrlAuth(realtime(path, query)), config),
   };
 };
 

@@ -37,12 +37,13 @@ const appendRuntimeQuery = (url: URL, query?: RuntimeUrlQuery): void => {
   }
 };
 
-const isActiveRuntimeApiUrl = (url: URL): boolean => {
+const isActiveRuntimeServiceUrl = (url: URL): boolean => {
   try {
     const apiBase = getRuntimeUrlResolver().api('/api');
     if (!/^[a-z][a-z\d+.-]*:\/\//i.test(apiBase)) return false;
     const base = new URL(apiBase);
-    return url.origin === base.origin && (url.pathname === base.pathname || url.pathname.startsWith(`${base.pathname.replace(/\/+$/, '')}/`));
+    if (url.origin !== base.origin) return false;
+    return shouldResolveApiPath(url.pathname);
   } catch {
     return false;
   }
@@ -82,10 +83,26 @@ export const buildRuntimeFetchUrl = (input: string, query?: RuntimeUrlQuery): st
   return input;
 };
 
-const mergeHeaders = async (inputHeaders?: HeadersInit, initHeaders?: HeadersInit): Promise<Headers> => {
+const shouldAttachRuntimeAuth = (input: string | URL | Request): boolean => {
+  const raw = input instanceof Request ? input.url : input.toString();
+  if (!isAbsoluteUrl(raw)) {
+    return shouldResolveApiPath(raw);
+  }
+
+  try {
+    return isActiveRuntimeServiceUrl(new URL(raw));
+  } catch {
+    return false;
+  }
+};
+
+const mergeHeaders = async (inputHeaders?: HeadersInit, initHeaders?: HeadersInit, attachAuth = true): Promise<Headers> => {
   const headers = new Headers(inputHeaders);
   if (initHeaders) {
     new Headers(initHeaders).forEach((value, key) => headers.set(key, value));
+  }
+  if (!attachAuth) {
+    return headers;
   }
   return buildRuntimeAuthHeaders(headers);
 };
@@ -107,7 +124,7 @@ export const runtimeFetch = async (input: string | URL | Request, init: RuntimeF
   const { query, ...requestInit } = init;
   const resolvedInput = resolveRuntimeFetchInput(input, query);
   const inputHeaders = resolvedInput instanceof Request ? resolvedInput.headers : undefined;
-  const headers = await mergeHeaders(inputHeaders, requestInit.headers);
+  const headers = await mergeHeaders(inputHeaders, requestInit.headers, shouldAttachRuntimeAuth(resolvedInput));
 
   if (resolvedInput instanceof Request) {
     return fetch(new Request(resolvedInput, { ...requestInit, headers }));
@@ -131,7 +148,7 @@ export const installRuntimeFetchBridge = (): void => {
       if (!shouldResolveFetchInput(input)) {
         try {
           const url = new URL(input);
-          if (isActiveRuntimeApiUrl(url)) {
+          if (isActiveRuntimeServiceUrl(url)) {
             const headers = await mergeHeaders(undefined, init?.headers);
             return nativeFetch(input, { ...init, headers });
           }
@@ -147,7 +164,7 @@ export const installRuntimeFetchBridge = (): void => {
     if (input instanceof URL) {
       const raw = input.toString();
       if (!shouldResolveFetchInput(raw)) {
-        if (isActiveRuntimeApiUrl(input)) {
+        if (isActiveRuntimeServiceUrl(input)) {
           const headers = await mergeHeaders(undefined, init?.headers);
           return nativeFetch(input, { ...init, headers });
         }
@@ -161,7 +178,7 @@ export const installRuntimeFetchBridge = (): void => {
       if (!shouldResolveFetchInput(input.url)) {
         try {
           const url = new URL(input.url);
-          if (isActiveRuntimeApiUrl(url)) {
+          if (isActiveRuntimeServiceUrl(url)) {
             const headers = await mergeHeaders(input.headers, init?.headers);
             return nativeFetch(new Request(input, { ...init, headers }));
           }

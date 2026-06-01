@@ -185,6 +185,7 @@ export function useAllLiveSessions(): Session[] {
 // Boot debounce — suppresses redundant refresh/re-bootstrap events during startup.
 let bootingRoot = false
 let bootedAt = 0
+let globalBootstrapGeneration = 0
 const BOOT_DEBOUNCE_MS = 1500
 const RECONNECT_MESSAGE_LIMIT = 30
 const SESSION_MATERIALIZATION_MESSAGE_LIMIT = 30
@@ -1627,15 +1628,29 @@ export function SyncProvider(props: {
   // Bootstrap global state — set bootingRoot/bootedAt to suppress
   // redundant refresh events during startup
   useEffect(() => {
+    const generation = ++globalBootstrapGeneration
     bootingRoot = true
     const globalActions = useGlobalSyncStore.getState().actions
-    bootstrapGlobal(props.sdk, globalActions.set)
+    bootstrapGlobal(props.sdk, (patch) => {
+      if (globalBootstrapGeneration === generation) {
+        globalActions.set(patch)
+      }
+    })
       .then(() => {
-        bootedAt = Date.now()
+        if (globalBootstrapGeneration === generation) {
+          bootedAt = Date.now()
+        }
       })
       .finally(() => {
-        bootingRoot = false
+        if (globalBootstrapGeneration === generation) {
+          bootingRoot = false
+        }
       })
+    return () => {
+      if (globalBootstrapGeneration === generation) {
+        bootingRoot = false
+      }
+    }
   }, [props.sdk])
 
   // Event pipeline — created once per mount. No class, no start/stop.

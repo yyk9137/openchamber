@@ -213,15 +213,15 @@ const MobileShell: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [overflowOpen, setOverflowOpen] = React.useState(false);
   // When set, the Changes surface opens directly into the per-file diff for this path.
-  const [pendingChangesDiffPath, setPendingChangesDiffPath] = React.useState<string | null>(null);
+  const [pendingChangesDiff, setPendingChangesDiff] = React.useState<{ path: string; staged: boolean } | null>(null);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
   const gitStatus = useGitStatus(normalizePath(currentDirectory) || null);
   const dirtyChangeCount = gitStatus?.files?.length ?? 0;
 
   const mobileActions = React.useMemo<MobileAppActions>(
     () => ({
-      openChanges: ({ diffPath } = {}) => {
-        setPendingChangesDiffPath(diffPath ?? null);
+      openChanges: ({ diffPath, staged } = {}) => {
+        setPendingChangesDiff(diffPath ? { path: diffPath, staged: staged === true } : null);
         setChangesOpen(true);
       },
       openFiles: () => setFilesOpen(true),
@@ -232,7 +232,7 @@ const MobileShell: React.FC = () => {
 
   const closeChanges = React.useCallback(() => {
     setChangesOpen(false);
-    setPendingChangesDiffPath(null);
+    setPendingChangesDiff(null);
   }, []);
 
   const overflowItems: OverflowItem[] = React.useMemo(
@@ -304,7 +304,11 @@ const MobileShell: React.FC = () => {
           headerless
         >
           <ErrorBoundary>
-            <MobileChangesSurface onClose={closeChanges} initialDiffPath={pendingChangesDiffPath} />
+            <MobileChangesSurface
+              onClose={closeChanges}
+              initialDiffPath={pendingChangesDiff?.path ?? null}
+              initialDiffStaged={pendingChangesDiff?.staged === true}
+            />
           </ErrorBoundary>
         </MobileSurfaceShell>
 

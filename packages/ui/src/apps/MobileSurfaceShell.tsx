@@ -55,6 +55,8 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
   const [dragOffset, setDragOffset] = React.useState(0);
   const dragStartYRef = React.useRef<number | null>(null);
   const isDraggingRef = React.useRef(false);
+  const surfaceRef = React.useRef<HTMLElement | null>(null);
+  const previousFocusRef = React.useRef<HTMLElement | null>(null);
 
   if (typeof document !== 'undefined' && !rootRef.current) {
     rootRef.current = ensureSurfaceRoot();
@@ -74,14 +76,51 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
   React.useEffect(() => {
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     document.body.style.overflow = 'hidden';
+    const focusFirstElement = () => {
+      const surface = surfaceRef.current;
+      if (!surface) return;
+      const focusable = surface.querySelector<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      (focusable ?? surface).focus({ preventScroll: true });
+    };
+    const focusTimer = window.setTimeout(focusFirstElement, ENTER_DELAY_MS);
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const surface = surfaceRef.current;
+      if (!surface) return;
+      const focusable = Array.from(surface.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true');
+      if (focusable.length === 0) {
+        event.preventDefault();
+        surface.focus({ preventScroll: true });
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
+      window.clearTimeout(focusTimer);
       document.body.style.overflow = previousOverflow;
       document.removeEventListener('keydown', handleKeyDown);
+      previousFocusRef.current?.focus?.({ preventScroll: true });
+      previousFocusRef.current = null;
     };
   }, [onClose, open]);
 
@@ -157,7 +196,9 @@ export const MobileSurfaceShell: React.FC<MobileSurfaceShellProps> = ({
         onClick={onClose}
       />
       <section
+        ref={surfaceRef}
         className="relative flex h-[100dvh] w-full flex-col overflow-hidden rounded-t-[20px] border-t border-border/40 bg-background text-foreground shadow-[0_-12px_48px_rgb(0_0_0_/_0.35)] will-change-transform"
+        tabIndex={-1}
         style={{
           transform: visualTransform,
           transition: isDraggingRef.current
