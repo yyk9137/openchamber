@@ -2,12 +2,15 @@ import React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import type { IconName } from '@/components/icon/icons';
+import { McpIcon } from '@/components/icons/McpIcon';
+import { McpDropdownContent } from '@/components/mcp/McpDropdown';
 import { AboutSettings } from '@/components/sections/openchamber/AboutSettings';
 import { OpenCodeUpdateToast } from '@/components/update/OpenCodeUpdateToast';
 import { ProviderLogo } from '@/components/ui/ProviderLogo';
 import { ChatView } from '@/components/views/ChatView';
 import { SettingsView } from '@/components/views/SettingsView';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { RuntimeAPIProvider } from '@/contexts/RuntimeAPIProvider';
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -32,6 +35,8 @@ import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
 import { useGitHubAuthStore } from '@/stores/useGitHubAuthStore';
 import { useGitStatus, useGitStore, useIsGitRepo } from '@/stores/useGitStore';
+import { useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
+import { useMcpStore } from '@/stores/useMcpStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useQuotaAutoRefresh, useQuotaStore } from '@/stores/useQuotaStore';
 import { listProjectWorktrees } from '@/lib/worktrees/worktreeManager';
@@ -97,8 +102,9 @@ const getProjectLabel = (path: string): string => {
 };
 
 type OverflowItem = {
-  key: 'files' | 'changes' | 'update' | 'settings';
-  icon: IconName;
+  key: 'files' | 'changes' | 'mcp' | 'update' | 'settings';
+  icon?: IconName;
+  iconNode?: React.ReactNode;
   label: string;
   badge?: number;
   onSelect: () => void;
@@ -389,7 +395,7 @@ const MobileOverflowMenu: React.FC<{
               onClose();
             }}
           >
-            <Icon name={item.icon} className="size-5 shrink-0 text-muted-foreground" />
+            {item.iconNode ?? (item.icon ? <Icon name={item.icon} className="size-5 shrink-0 text-muted-foreground" /> : null)}
             <span className="min-w-0 flex-1 truncate typography-ui-label text-foreground">{item.label}</span>
             {item.badge && item.badge > 0 ? (
               <span className="inline-flex size-2 shrink-0 rounded-full bg-primary" aria-hidden />
@@ -698,14 +704,23 @@ const MobileShell: React.FC = () => {
   const [sessionsSheetOpen, setSessionsSheetOpen] = React.useState(false);
   const [filesOpen, setFilesOpen] = React.useState(false);
   const [changesOpen, setChangesOpen] = React.useState(false);
+  const [mcpOpen, setMcpOpen] = React.useState(false);
+  const [isMcpRefreshing, setIsMcpRefreshing] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [updateOpen, setUpdateOpen] = React.useState(false);
+  const [settingsInitialMobileStage, setSettingsInitialMobileStage] = React.useState<'nav' | 'page-content'>('nav');
   const [overflowOpen, setOverflowOpen] = React.useState(false);
   // When set, the Changes surface opens directly into the per-file diff for this path.
   const [pendingChangesDiff, setPendingChangesDiff] = React.useState<{ path: string; staged: boolean } | null>(null);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
+  const setSettingsPage = useUIStore((state) => state.setSettingsPage);
   const updateAvailable = useUpdateStore((state) => state.available);
   const updateRuntimeType = useUpdateStore((state) => state.runtimeType);
+  const mcpServers = useMcpConfigStore((state) => state.mcpServers);
+  const setMcpDraft = useMcpConfigStore((state) => state.setMcpDraft);
+  const setSelectedMcp = useMcpConfigStore((state) => state.setSelectedMcp);
+  const refreshMcpStatus = useMcpStore((state) => state.refresh);
+  const loadMcpConfigs = useMcpConfigStore((state) => state.loadMcpConfigs);
   const gitStatus = useGitStatus(normalizePath(currentDirectory) || null);
   const dirtyChangeCount = gitStatus?.files?.length ?? 0;
 
@@ -716,7 +731,10 @@ const MobileShell: React.FC = () => {
         setChangesOpen(true);
       },
       openFiles: () => setFilesOpen(true),
-      openSettings: () => setSettingsOpen(true),
+      openSettings: () => {
+        setSettingsInitialMobileStage('nav');
+        setSettingsOpen(true);
+      },
     }),
     [],
   );
@@ -727,6 +745,52 @@ const MobileShell: React.FC = () => {
   }, []);
 
   const showUpdateItem = updateAvailable && (updateRuntimeType === 'desktop' || updateRuntimeType === 'web');
+
+  const openMcpCreateSettings = React.useCallback(() => {
+    const baseName = 'new-mcp-server';
+    let newName = baseName;
+    let counter = 1;
+    while (mcpServers.some((server) => server.name === newName)) {
+      newName = `${baseName}-${counter}`;
+      counter += 1;
+    }
+
+    const draft: McpDraft = {
+      name: newName,
+      scope: 'user',
+      type: 'local',
+      command: [],
+      url: '',
+      environment: [],
+      headers: [],
+      oauthEnabled: true,
+      oauthClientId: '',
+      oauthClientSecret: '',
+      oauthScope: '',
+      oauthRedirectUri: '',
+      timeout: '',
+      enabled: true,
+    };
+
+    setMcpDraft(draft);
+    setSelectedMcp(newName);
+    setSettingsPage('mcp');
+    setMcpOpen(false);
+    setSettingsInitialMobileStage('page-content');
+    setSettingsOpen(true);
+  }, [mcpServers, setMcpDraft, setSelectedMcp, setSettingsPage]);
+
+  const refreshMcpOverlay = React.useCallback(() => {
+    if (isMcpRefreshing) return;
+    setIsMcpRefreshing(true);
+    const directory = currentDirectory || null;
+    const minSpinPromise = new Promise((resolve) => window.setTimeout(resolve, 500));
+    void Promise.all([
+      refreshMcpStatus({ directory, silent: true }),
+      loadMcpConfigs({ force: true }),
+      minSpinPromise,
+    ]).finally(() => setIsMcpRefreshing(false));
+  }, [currentDirectory, isMcpRefreshing, loadMcpConfigs, refreshMcpStatus]);
 
   const overflowItems: OverflowItem[] = React.useMemo(
     () => [
@@ -743,6 +807,12 @@ const MobileShell: React.FC = () => {
         badge: dirtyChangeCount,
         onSelect: () => setChangesOpen(true),
       },
+      {
+        key: 'mcp',
+        iconNode: <McpIcon className="size-5 shrink-0 text-muted-foreground" />,
+        label: t('mobile.menu.mcp'),
+        onSelect: () => setMcpOpen(true),
+      },
       ...(showUpdateItem ? [{
         key: 'update' as const,
         icon: 'download' as const,
@@ -753,7 +823,10 @@ const MobileShell: React.FC = () => {
         key: 'settings',
         icon: 'settings-3',
         label: t('mobile.menu.settings'),
-        onSelect: () => setSettingsOpen(true),
+        onSelect: () => {
+          setSettingsInitialMobileStage('nav');
+          setSettingsOpen(true);
+        },
       },
     ],
     [dirtyChangeCount, showUpdateItem, t],
@@ -819,6 +892,62 @@ const MobileShell: React.FC = () => {
           </MobileSurfaceShell>
         ) : null}
 
+        {mcpOpen ? (
+          <MobileOverlayPanel
+            open
+            onClose={() => setMcpOpen(false)}
+            title={t('mcpDropdown.title')}
+            className="h-[72vh]"
+            contentMaxHeightClassName="max-h-full"
+            renderHeader={(closeButton) => (
+              <div className="shrink-0">
+                <div className="flex justify-center pt-2.5 pb-1">
+                  <div className="h-1 w-9 rounded-full bg-[color-mix(in_srgb,var(--surface-mutedForeground)_40%,transparent)]" />
+                </div>
+                <div className="flex items-center justify-between gap-2 px-4 pb-2">
+                  <h2 className="text-[16px] font-semibold text-[var(--surface-foreground)]">
+                    {t('mcpDropdown.title')}
+                  </h2>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      className="flex size-8 items-center justify-center rounded-full text-[var(--surface-mutedForeground)] transition-colors hover:bg-[var(--interactive-hover)] hover:text-[var(--surface-foreground)]"
+                      onClick={openMcpCreateSettings}
+                      aria-label={t('settings.mcp.sidebar.actions.addServerTitle')}
+                      title={t('settings.mcp.sidebar.actions.addServerTitle')}
+                      style={{ touchAction: 'manipulation' }}
+                    >
+                      <Icon name="add" className="h-5 w-5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="flex size-8 items-center justify-center rounded-full text-[var(--surface-mutedForeground)] transition-colors hover:bg-[var(--interactive-hover)] hover:text-[var(--surface-foreground)] disabled:opacity-60"
+                      onClick={refreshMcpOverlay}
+                      disabled={isMcpRefreshing}
+                      aria-label={t('mcpDropdown.actions.refreshAria')}
+                      title={t('mcpDropdown.actions.refreshAria')}
+                      style={{ touchAction: 'manipulation' }}
+                    >
+                      <Icon name="refresh" className={cn('h-5 w-5', isMcpRefreshing && 'animate-spin')} />
+                    </button>
+                    {closeButton}
+                  </div>
+                </div>
+              </div>
+            )}
+          >
+            <ErrorBoundary>
+              <McpDropdownContent
+                active
+                className="h-full"
+                listClassName="max-h-none"
+                hideHeader
+                mobileListDensity
+              />
+            </ErrorBoundary>
+          </MobileOverlayPanel>
+        ) : null}
+
         {settingsOpen ? (
           <MobileSurfaceShell
             open
@@ -830,6 +959,7 @@ const MobileShell: React.FC = () => {
               <SettingsView
                 forceMobile
                 isWindowed
+                initialMobileStage={settingsInitialMobileStage}
                 visiblePageSlugs={[...MOBILE_SETTINGS_PAGES]}
                 onClose={() => setSettingsOpen(false)}
               />
