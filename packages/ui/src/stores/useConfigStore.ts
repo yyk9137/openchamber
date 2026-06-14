@@ -699,7 +699,45 @@ const resolveInitialDirectoryKey = (): string => {
     }
 
     const directory = opencodeClient.getDirectory() ?? useDirectoryStore.getState().currentDirectory;
-    return toDirectoryKey(directory);
+    return toConfigDirectoryKey(directory);
+};
+
+/**
+ * Map a directory to its CONFIG scope. Providers/agents/defaults are defined at
+ * the PROJECT level (opencode.json), so a worktree must inherit its parent
+ * project's config instead of maintaining — and re-fetching — its own
+ * per-worktree snapshot. Returns the owning project's path when the directory is
+ * a known worktree, else the directory unchanged. Degrades gracefully (returns
+ * the directory) when the worktree→project mapping isn't available yet.
+ */
+const resolveConfigDirectory = (directory: string | null | undefined): string | null => {
+    const dir = typeof directory === 'string' && directory.trim().length > 0 ? directory : null;
+    if (!dir) return dir;
+    try {
+        const project = resolveProjectForSessionDirectory(
+            useProjectsStore.getState().projects,
+            useSessionUIStore.getState().availableWorktreesByProject,
+            dir,
+        );
+        return project?.path ?? dir;
+    } catch {
+        return dir;
+    }
+};
+
+const toConfigDirectoryKey = (directory: string | null | undefined): string =>
+    toDirectoryKey(resolveConfigDirectory(directory));
+
+// Runtime freshness tracking (NOT persisted) for the stale-while-revalidate
+// background refresh, keyed by config-directory key. Prevents re-fetching
+// project-scoped providers/agents we just loaded — e.g. initializeApp loading a
+// project, then activateDirectory firing for the same project moments later.
+const _providersLoadedAt = new Map<string, number>();
+const _agentsLoadedAt = new Map<string, number>();
+const CONFIG_REFRESH_TTL_MS = 30_000;
+const isConfigFresh = (loadedAt: Map<string, number>, key: string): boolean => {
+    const at = loadedAt.get(key);
+    return typeof at === 'number' && Date.now() - at < CONFIG_REFRESH_TTL_MS;
 };
 
 interface DirectoryScopedConfig {
@@ -1155,7 +1193,11 @@ export const useConfigStore = create<ConfigStore>()(
                     return 500;
                 })(),
                 activateDirectory: async (directory) => {
-                    const directoryKey = toDirectoryKey(directory);
+                    // Resolve the worktree to its owning project up-front so the
+                    // active key + snapshot key always match and stay project-scoped.
+                    // Everything below operates on this key unchanged; the OpenCode
+                    // working directory (opencodeClient.getDirectory()) is separate.
+                    const directoryKey = toConfigDirectoryKey(directory);
                     let snapshotHadProviders = false;
                     let snapshotHadAgents = false;
 
@@ -1200,15 +1242,23 @@ export const useConfigStore = create<ConfigStore>()(
                     // stays instant but never shows stale provider/agent data for
                     // longer than one fetch. Only block when there is nothing to show.
                     if (snapshotHadProviders) {
-                        markStartupTrace('activateDirectory:refreshProvidersBackground', { directoryKey });
-                        void get().loadProviders({ directory: fromDirectoryKey(directoryKey), source: 'activateDirectory:refresh' });
+                        if (isConfigFresh(_providersLoadedAt, directoryKey)) {
+                            markStartupTrace('activateDirectory:providersFresh', { directoryKey });
+                        } else {
+                            markStartupTrace('activateDirectory:refreshProvidersBackground', { directoryKey });
+                            void get().loadProviders({ directory: fromDirectoryKey(directoryKey), source: 'activateDirectory:refresh' });
+                        }
                     } else {
                         await get().loadProviders({ directory: fromDirectoryKey(directoryKey), source: 'activateDirectory' });
                     }
 
                     if (snapshotHadAgents) {
-                        markStartupTrace('activateDirectory:refreshAgentsBackground', { directoryKey });
-                        void get().loadAgents({ directory: fromDirectoryKey(directoryKey), source: 'activateDirectory:refresh' });
+                        if (isConfigFresh(_agentsLoadedAt, directoryKey)) {
+                            markStartupTrace('activateDirectory:agentsFresh', { directoryKey });
+                        } else {
+                            markStartupTrace('activateDirectory:refreshAgentsBackground', { directoryKey });
+                            void get().loadAgents({ directory: fromDirectoryKey(directoryKey), source: 'activateDirectory:refresh' });
+                        }
                     } else {
                         await get().loadAgents({ directory: fromDirectoryKey(directoryKey), source: 'activateDirectory' });
                     }
@@ -1267,8 +1317,11 @@ export const useConfigStore = create<ConfigStore>()(
 
                 loadProviders: async (options) => {
                     const requestedDirectory = options?.directory ?? fromDirectoryKey(get().activeDirectoryKey);
-                    const effectiveDirectory = requestedDirectory ?? opencodeClient.getDirectory() ?? null;
-                    const directoryKey = toDirectoryKey(requestedDirectory);
+                    // Providers are project-scoped: resolve a worktree to its project
+                    // so it reuses one shared snapshot instead of its own.
+                    const configDirectory = resolveConfigDirectory(requestedDirectory);
+                    const effectiveDirectory = configDirectory ?? opencodeClient.getDirectory() ?? null;
+                    const directoryKey = toDirectoryKey(configDirectory);
                     const source = options?.source ?? 'unknown';
                     markStartupTrace('loadProviders:called', { directoryKey, source, requestedDirectory, effectiveDirectory });
 
@@ -1388,6 +1441,7 @@ export const useConfigStore = create<ConfigStore>()(
                                 providers: processedProviders.length,
                                 models: processedProviders.reduce((count, provider) => count + provider.models.length, 0),
                             });
+                            _providersLoadedAt.set(directoryKey, Date.now());
                             return;
                         } catch (error) {
                             lastError = error;
@@ -1682,8 +1736,11 @@ export const useConfigStore = create<ConfigStore>()(
 
                 loadAgents: async (options) => {
                     const requestedDirectory = options?.directory ?? fromDirectoryKey(get().activeDirectoryKey);
-                    const effectiveDirectory = requestedDirectory ?? opencodeClient.getDirectory() ?? null;
-                    const directoryKey = toDirectoryKey(requestedDirectory);
+                    // Agents are project-scoped: resolve a worktree to its project
+                    // so it reuses one shared snapshot instead of its own.
+                    const configDirectory = resolveConfigDirectory(requestedDirectory);
+                    const effectiveDirectory = configDirectory ?? opencodeClient.getDirectory() ?? null;
+                    const directoryKey = toDirectoryKey(configDirectory);
                     const source = options?.source ?? 'unknown';
                     markStartupTrace('loadAgents:called', { directoryKey, source, requestedDirectory, effectiveDirectory });
 
@@ -1856,6 +1913,7 @@ export const useConfigStore = create<ConfigStore>()(
                                     durationMs: Math.round(loaderEnded - loaderStarted),
                                     agents: safeAgents.length,
                                 });
+                                _agentsLoadedAt.set(directoryKey, Date.now());
                                 return true;
                             }
 
@@ -1968,6 +2026,7 @@ export const useConfigStore = create<ConfigStore>()(
                                 durationMs: Math.round(loaderEnded - loaderStarted),
                                 agents: safeAgents.length,
                             });
+                            _agentsLoadedAt.set(directoryKey, Date.now());
                             return true;
                         } catch (error) {
                             lastError = error;
