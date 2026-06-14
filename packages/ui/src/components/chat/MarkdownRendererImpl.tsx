@@ -1194,6 +1194,7 @@ const FILE_REFERENCE_STAT_CACHE_MAX = 1000;
 const VSCODE_FILE_REFERENCE_STAT_CACHE_MAX = 200;
 const FILE_REFERENCE_LINK_LIMIT = 80;
 const VSCODE_FILE_REFERENCE_LINK_LIMIT = 40;
+const FILE_REFERENCE_ANNOTATION_DELAY_MS = 160;
 const FILE_REFERENCE_STAT_CACHE = new Map<string, Promise<boolean>>();
 let activeFileReferenceStatCount = 0;
 const pendingFileReferenceStats: Array<() => void> = [];
@@ -1772,10 +1773,10 @@ const useFileReferenceInteractions = ({
       void openFileReference(target);
     };
 
-    scheduleAnnotation();
+    scheduleAnnotation(FILE_REFERENCE_ANNOTATION_DELAY_MS);
 
     const observer = new MutationObserver(() => {
-      scheduleAnnotation(160);
+      scheduleAnnotation(FILE_REFERENCE_ANNOTATION_DELAY_MS);
     });
     observer.observe(container, {
       childList: true,
