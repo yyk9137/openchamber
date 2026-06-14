@@ -2,7 +2,7 @@ import React from 'react';
 import 'katex/dist/katex.min.css';
 import { renderMermaidASCII, renderMermaidSVG } from 'beautiful-mermaid';
 import ReactMarkdown from 'react-markdown';
-import type { Components } from 'react-markdown';
+import type { Components, Options as ReactMarkdownOptions } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -573,6 +573,9 @@ const stripLeadingFrontmatter = (markdown: string): string => {
 
 export type MarkdownVariant = 'assistant' | 'tool' | 'reasoning';
 
+const MARKDOWN_REMARK_PLUGINS: ReactMarkdownOptions['remarkPlugins'] = [remarkGfm, remarkMath];
+const MARKDOWN_REHYPE_PLUGINS: ReactMarkdownOptions['rehypePlugins'] = [[rehypeKatex, { throwOnError: false, errorColor: 'var(--destructive)' }]];
+
 type MarkdownStreamBlock = {
   key: string;
   raw: string;
@@ -1105,7 +1108,7 @@ const MarkdownBlockView: React.FC<{
   components: Components;
 }> = React.memo(({ block, components }) => {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[[rehypeKatex, { throwOnError: false, errorColor: 'var(--destructive)' }]]} components={components}>
+    <ReactMarkdown remarkPlugins={MARKDOWN_REMARK_PLUGINS} rehypePlugins={MARKDOWN_REHYPE_PLUGINS} components={components}>
       {block.src}
     </ReactMarkdown>
   );
