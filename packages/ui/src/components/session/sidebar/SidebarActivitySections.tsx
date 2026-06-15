@@ -22,7 +22,27 @@ type ActivitySection = {
 
 type Props = {
   sections: ActivitySection[];
-  renderSessionNode: (node: SessionNode, depth?: number, groupDirectory?: string | null, projectId?: string | null, archivedBucket?: boolean, secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null, renderContext?: 'project' | 'recent') => React.ReactNode;
+  renderSessionNode: (
+    node: SessionNode,
+    depth?: number,
+    groupDirectory?: string | null,
+    projectId?: string | null,
+    archivedBucket?: boolean,
+    secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
+    renderContext?: 'project' | 'recent',
+    renderExtras?: {
+      subtreeContainsActive: Set<string>;
+      subtreeContainsEditing: Set<string>;
+      menuOpenSessionId: string | null;
+      nodeStructureKey: string;
+      childRenderExtrasFor?: (child: SessionNode) => {
+        subtreeContainsActive: Set<string>;
+        subtreeContainsEditing: Set<string>;
+        menuOpenSessionId: string | null;
+        nodeStructureKey: string;
+      };
+    },
+  ) => React.ReactNode;
   variant?: 'section' | 'flat';
   initialVisibleCount?: number;
   batchSize?: number;

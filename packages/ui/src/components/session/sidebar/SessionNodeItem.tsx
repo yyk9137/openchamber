@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Icon } from "@/components/icon/Icon";
 import { buildExportFilename, downloadAsMarkdown, formatSessionAsMarkdown, getExportRevealLabelKey, revealExportedMarkdown, saveAsMarkdownDesktop } from '@/lib/exportSession';
 import type { ChildSessionExport } from '@/lib/exportSession';
-import { buildSessionMessageRecordsSnapshot, useDirectoryStore, useGlobalSessionStatus, useSession, useSessionPermissions } from '@/sync/sync-context';
+import { buildSessionMessageRecordsSnapshot, useDirectoryStore, useGlobalSessionStatus, useSessionPermissions } from '@/sync/sync-context';
 import { useSync } from '@/sync/use-sync';
 import { useViewportStore, viewportSessionKey } from '@/sync/viewport-store';
 import { DraggableSessionRow } from './sessionFolderDnd';
@@ -83,61 +83,74 @@ type Props = {
   handleDeleteSession: (session: Session, source?: { archivedBucket?: boolean; hardDelete?: boolean }) => void;
   mobileVariant: boolean;
   alwaysShowActions: boolean;
-  renderSessionNode: (node: SessionNode, depth?: number, groupDirectory?: string | null, projectId?: string | null, archivedBucket?: boolean, secondaryMeta?: SecondaryMeta | null, renderContext?: 'project' | 'recent') => React.ReactNode;
+  renderSessionNode: (
+    node: SessionNode,
+    depth?: number,
+    groupDirectory?: string | null,
+    projectId?: string | null,
+    archivedBucket?: boolean,
+    secondaryMeta?: SecondaryMeta | null,
+    renderContext?: 'project' | 'recent',
+    renderExtras?: {
+      subtreeContainsActive: Set<string>;
+      subtreeContainsEditing: Set<string>;
+      menuOpenSessionId: string | null;
+      nodeStructureKey: string;
+      childRenderExtrasFor?: (child: SessionNode) => {
+        subtreeContainsActive: Set<string>;
+        subtreeContainsEditing: Set<string>;
+        menuOpenSessionId: string | null;
+        nodeStructureKey: string;
+      };
+    },
+  ) => React.ReactNode;
   secondaryMeta?: SecondaryMeta | null;
   renderContext?: 'project' | 'recent';
-};
-
-const getNodeChildSignature = (node: SessionNode): string => {
-  if (node.children.length === 0) {
-    return '';
-  }
-
-  return node.children
-    .map((child) => `${child.session.id}:${child.children.length}`)
-    .join('|');
-};
-
-const treeContainsSessionId = (node: SessionNode, sessionId: string | null): boolean => {
-  if (!sessionId) {
-    return false;
-  }
-
-  if (node.session.id === sessionId) {
-    return true;
-  }
-
-  for (const child of node.children) {
-    if (treeContainsSessionId(child, sessionId)) {
-      return true;
-    }
-  }
-
-  return false;
-};
-
-const treeContainsMenuKey = (
-  node: SessionNode,
-  menuKey: string | null,
-  renderContext: 'project' | 'recent',
-  archivedBucket: boolean,
-): boolean => {
-  if (!menuKey) {
-    return false;
-  }
-
-  const nodeMenuKey = `${renderContext}:${archivedBucket ? 'archived' : 'active'}:${node.session.id}`;
-  if (nodeMenuKey === menuKey) {
-    return true;
-  }
-
-  for (const child of node.children) {
-    if (treeContainsMenuKey(child, menuKey, renderContext, archivedBucket)) {
-      return true;
-    }
-  }
-
-  return false;
+  /**
+   * Precomputed set of session IDs whose subtree contains the current
+   * active session. Computed once per SessionGroupSection render (when
+   * currentSessionId changes) instead of being recomputed in every row's
+   * React.memo comparator.
+   */
+  subtreeContainsActive: Set<string>;
+  /**
+   * Precomputed set of session IDs whose subtree contains the session
+   * currently being edited. Same rationale as subtreeContainsActive.
+   */
+  subtreeContainsEditing: Set<string>;
+  /**
+   * Precomputed session ID of the row whose sidebar menu is open, or null
+   * if no menu is open. Only one row can have its menu open at a time.
+   */
+  menuOpenSessionId: string | null;
+  /**
+   * Precomputed structural key for this node. Encodes the IDs and child
+   * counts of all descendants so a reference-only change to `node` (e.g.
+   * a fresh tree rebuild) can be detected with a single string compare
+   * instead of a recursive walk per row.
+   */
+  nodeStructureKey: string;
+  /**
+   * Resolves the per-row render extras for each child node. SessionGroupSection
+   * walks the whole tree once to precompute the structure key for every
+   * descendant; SessionNodeItem's recursive child render uses this lookup
+   * to fetch the right key for each child it produces.
+   */
+  childRenderExtrasFor?: (child: SessionNode) => {
+    subtreeContainsActive: Set<string>;
+    subtreeContainsEditing: Set<string>;
+    menuOpenSessionId: string | null;
+    nodeStructureKey: string;
+  };
+  /**
+   * Batched index of live session objects keyed by id. The previous
+   * implementation called `useSession(session.id)` per row, which used
+   * `findLiveSession` to iterate every child-store on every SSE event.
+   * With M visible rows that's M×child-stores per event; the batched
+   * map turns it into a single Map.get per row. The parent falls back
+   * to `useSession` only when this map returns undefined.
+   */
+  liveSessionById: Map<string, Session>;
 };
 
 const areEqual = (prev: Props, next: Props): boolean => {
@@ -148,17 +161,14 @@ const areEqual = (prev: Props, next: Props): boolean => {
 
   if (prevSessionId !== nextSessionId) return false;
   if (prev.node.session !== next.node.session) return false;
-  if (getNodeChildSignature(prev.node) !== getNodeChildSignature(next.node)) return false;
+  if (prev.nodeStructureKey !== next.nodeStructureKey) return false;
   if (prev.depth !== next.depth) return false;
   if (prev.groupDirectory !== next.groupDirectory) return false;
   if (prev.projectId !== next.projectId) return false;
   if (prev.archivedBucket !== next.archivedBucket) return false;
-  if (prev.currentSessionId !== next.currentSessionId) {
-    const prevActiveInTree = treeContainsSessionId(prev.node, prev.currentSessionId);
-    const nextActiveInTree = treeContainsSessionId(next.node, next.currentSessionId);
-    if (prevActiveInTree || nextActiveInTree) {
-      return false;
-    }
+  if (prev.currentSessionId !== next.currentSessionId
+    && (prev.subtreeContainsActive.has(prevSessionId) || next.subtreeContainsActive.has(nextSessionId))) {
+    return false;
   }
   if (prev.pinnedSessionIds.has(prevSessionId) !== next.pinnedSessionIds.has(nextSessionId)) return false;
   // Expansion is keyed per render context, so compare the composite key
@@ -176,25 +186,21 @@ const areEqual = (prev: Props, next: Props): boolean => {
   if (prev.hasSessionSearchQuery !== next.hasSessionSearchQuery) return false;
   if (prev.normalizedSessionSearchQuery !== next.normalizedSessionSearchQuery) return false;
   if (prev.notifyOnSubtasks !== next.notifyOnSubtasks) return false;
-  if (prev.editingId !== next.editingId) {
-    const prevEditingInTree = treeContainsSessionId(prev.node, prev.editingId);
-    const nextEditingInTree = treeContainsSessionId(next.node, next.editingId);
-    if (prevEditingInTree || nextEditingInTree) {
-      return false;
-    }
+  if (prev.editingId !== next.editingId
+    && (prev.subtreeContainsEditing.has(prevSessionId) || next.subtreeContainsEditing.has(nextSessionId))) {
+    return false;
   }
-  if (prev.editTitle !== next.editTitle) {
-    const prevEditingInTree = treeContainsSessionId(prev.node, prev.editingId);
-    const nextEditingInTree = treeContainsSessionId(next.node, next.editingId);
-    if (prevEditingInTree || nextEditingInTree) {
-      return false;
-    }
+  if (prev.editTitle !== next.editTitle
+    && (prev.subtreeContainsEditing.has(prevSessionId) || next.subtreeContainsEditing.has(nextSessionId))) {
+    return false;
   }
   if ((prev.copiedSessionId === prevSessionId) !== (next.copiedSessionId === nextSessionId)) return false;
 
-  const prevMenuInTree = treeContainsMenuKey(prev.node, prev.openSidebarMenuKey, prev.renderContext ?? 'project', prev.archivedBucket ?? false);
-  const nextMenuInTree = treeContainsMenuKey(next.node, next.openSidebarMenuKey, next.renderContext ?? 'project', next.archivedBucket ?? false);
-  if (prevMenuInTree !== nextMenuInTree) return false;
+  if (prev.menuOpenSessionId !== next.menuOpenSessionId) {
+    const prevIsOpen = prev.menuOpenSessionId === prevSessionId;
+    const nextIsOpen = next.menuOpenSessionId === nextSessionId;
+    if (prevIsOpen !== nextIsOpen) return false;
+  }
 
   const prevDirectory = normalizePath((prevSession as Session & { directory?: string | null }).directory ?? null)
     ?? normalizePath(prev.groupDirectory ?? null);
@@ -208,6 +214,7 @@ const areEqual = (prev: Props, next: Props): boolean => {
   if (prev.alwaysShowActions !== next.alwaysShowActions) return false;
   if ((prev.renderContext ?? 'project') !== (next.renderContext ?? 'project')) return false;
   if (prev.renamingFolderId !== next.renamingFolderId) return false;
+  if (prev.liveSessionById !== next.liveSessionById) return false;
 
   return true;
 };
@@ -255,6 +262,11 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
     renderSessionNode,
     secondaryMeta,
     renderContext = 'project',
+    subtreeContainsActive,
+    subtreeContainsEditing,
+    menuOpenSessionId,
+    childRenderExtrasFor,
+    liveSessionById,
   } = props;
   const hasSecondaryProjectLabel = Boolean(secondaryMeta?.projectLabel);
   const hasSecondaryBranchLabel = Boolean(secondaryMeta?.branchLabel);
@@ -305,8 +317,14 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   const formRef = React.useRef<HTMLFormElement>(null);
 
   const session = node.session;
-  const liveSession = useSession(session.id);
-  const resolvedSession = liveSession ?? session;
+  // Batched live-session lookup. `liveSessionById` is built once per
+  // Sidebar render from the same `useAllLiveSessions` selector that
+  // `useSession` would have iterated per child-store, so a Map.get
+  // here is equivalent in observed state but O(1) per row instead of
+  // O(child-stores). Falls back to the row session when the live map
+  // hasn't seen this id yet (sub-render latency between when a session
+  // is created and when the SSE-driven aggregate picks it up).
+  const resolvedSession = liveSessionById.get(session.id) ?? session;
 
   const sessionDirectory =
     normalizePath((session as Session & { directory?: string | null }).directory ?? null)
@@ -1030,18 +1048,18 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
             ) : (
               <button
                 type="button"
- 	                onPointerDown={handleRowPointerDown}
- 	                onPointerUp={handleRowPointerEnd}
- 	                onPointerCancel={handleRowPointerEnd}
- 	                onMouseDown={handleRowMouseDown}
- 	                onClick={(event) => handleRowSelect(event)}
+	                onPointerDown={handleRowPointerDown}
+	                onPointerUp={handleRowPointerEnd}
+	                onPointerCancel={handleRowPointerEnd}
+	                onMouseDown={handleRowMouseDown}
+	                onClick={(event) => handleRowSelect(event)}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   handleSessionDoubleClick(session.id, sessionTitle);
                 }}
                 className={cn(
-  	                  'flex min-w-0 flex-1 cursor-pointer flex-col gap-0 overflow-hidden rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 text-foreground select-none transition-[padding]',
-  	                  isTouchPressed && 'bg-interactive-hover/70',
+	                  'flex min-w-0 flex-1 cursor-pointer flex-col gap-0 overflow-hidden rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 text-foreground select-none transition-[padding]',
+	                  isTouchPressed && 'bg-interactive-hover/70',
                   alwaysShowActions
                     ? (isVSCode ? revealPaddingClass : alwaysActionPaddingClass)
                     : revealPaddingClass
@@ -1159,7 +1177,31 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
         </ContextMenu.Root>
       </DraggableSessionRow>
       {hasChildren && isExpanded
-        ? node.children.map((child) => renderSessionNode(child, depth + 1, sessionDirectory ?? groupDirectory, projectId, archivedBucket, undefined, renderContext))
+        ? node.children.map((child): React.ReactNode => {
+          const childRenderExtras: {
+            subtreeContainsActive: Set<string>;
+            subtreeContainsEditing: Set<string>;
+            menuOpenSessionId: string | null;
+            nodeStructureKey: string;
+          } = childRenderExtrasFor
+            ? childRenderExtrasFor(child)
+            : {
+                subtreeContainsActive,
+                subtreeContainsEditing,
+                menuOpenSessionId,
+                nodeStructureKey: '',
+              };
+          return renderSessionNode(
+            child,
+            depth + 1,
+            sessionDirectory ?? groupDirectory,
+            projectId,
+            archivedBucket,
+            undefined,
+            renderContext,
+            childRenderExtras,
+          );
+        })
         : null}
       <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
         <DialogContent showCloseButton={false} className="max-w-sm gap-5">
