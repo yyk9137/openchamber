@@ -620,68 +620,44 @@ function updateAgent(agentName, updates, workingDirectory) {
   console.log(`Updated agent: ${agentName} (scope: ${targetScope}, md: ${mdModified}, json: ${jsonModified})`);
 }
 
-function deleteJsonAgentEntry(config, agentName) {
-  const agentMap = config.agent;
-  if (!agentMap || typeof agentMap !== 'object' || Array.isArray(agentMap) || !agentMap[agentName]) return false;
-  delete agentMap[agentName];
-  if (Object.keys(agentMap).length === 0) {
-    delete config.agent;
-  }
-  return true;
-}
-
-function deleteAgent(agentName, workingDirectory, scope) {
+function deleteAgent(agentName, workingDirectory) {
   const lookupCache = createAgentLookupCache();
-  const requestedScope = scope === AGENT_SCOPE.PROJECT || scope === AGENT_SCOPE.USER ? scope : null;
+  let deleted = false;
 
-  if ((!requestedScope || requestedScope === AGENT_SCOPE.PROJECT) && workingDirectory) {
+  if (workingDirectory) {
     const projectPath = getProjectAgentPath(workingDirectory, agentName);
     if (fs.existsSync(projectPath)) {
       fs.unlinkSync(projectPath);
       console.log(`Deleted project-level agent .md file: ${projectPath}`);
-      return;
+      deleted = true;
     }
   }
 
-  if (!requestedScope || requestedScope === AGENT_SCOPE.USER) {
-    const userPath = getUserAgentPath(agentName, lookupCache);
-    if (fs.existsSync(userPath)) {
-      fs.unlinkSync(userPath);
-      console.log(`Deleted user-level agent .md file: ${userPath}`);
-      return;
-    }
+  const userPath = getUserAgentPath(agentName, lookupCache);
+  if (fs.existsSync(userPath)) {
+    fs.unlinkSync(userPath);
+    console.log(`Deleted user-level agent .md file: ${userPath}`);
+    deleted = true;
   }
 
   const layers = readConfigLayers(workingDirectory);
-
-  if (requestedScope === AGENT_SCOPE.PROJECT) {
-    if (layers.paths.projectPath && deleteJsonAgentEntry(layers.projectConfig, agentName)) {
-      writeConfig(layers.projectConfig, layers.paths.projectPath);
-      console.log(`Removed project-level agent from opencode.json: ${agentName}`);
-      return;
-    }
-    throw new Error(`Project agent ${agentName} not found`);
-  }
-
-  if (requestedScope === AGENT_SCOPE.USER) {
-    const userJsonPath = layers.paths.customPath || layers.paths.userPath;
-    const userJsonConfig = layers.paths.customPath ? layers.customConfig : layers.userConfig;
-    if (userJsonPath && deleteJsonAgentEntry(userJsonConfig, agentName)) {
-      writeConfig(userJsonConfig, userJsonPath);
-      console.log(`Removed user-level agent from opencode.json: ${agentName}`);
-      return;
-    }
-    throw new Error(`User agent ${agentName} not found`);
-  }
-
   const jsonSource = getJsonEntrySource(layers, 'agent', agentName);
-  if (jsonSource.exists && jsonSource.config && jsonSource.path && deleteJsonAgentEntry(jsonSource.config, agentName)) {
+  if (jsonSource.exists && jsonSource.config && jsonSource.path) {
+    if (!jsonSource.config.agent) jsonSource.config.agent = {};
+    delete jsonSource.config.agent[agentName];
     writeConfig(jsonSource.config, jsonSource.path);
     console.log(`Removed agent from opencode.json: ${agentName}`);
-    return;
+    deleted = true;
   }
 
-  throw new Error(`Agent ${agentName} is built-in or not deletable`);
+  if (!deleted) {
+    const jsonTarget = getJsonWriteTarget(layers, workingDirectory ? AGENT_SCOPE.PROJECT : AGENT_SCOPE.USER);
+    const targetConfig = jsonTarget.config || {};
+    if (!targetConfig.agent) targetConfig.agent = {};
+    targetConfig.agent[agentName] = { disable: true };
+    writeConfig(targetConfig, jsonTarget.path || CONFIG_FILE);
+    console.log(`Disabled built-in agent: ${agentName}`);
+  }
 }
 
 export {

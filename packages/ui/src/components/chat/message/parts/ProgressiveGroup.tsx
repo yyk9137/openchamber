@@ -35,6 +35,7 @@ interface ProgressiveGroupProps {
     isExpanded: boolean;
     collapsedPreviewCount?: number;
     onToggle: () => void;
+    syntaxTheme: Record<string, React.CSSProperties>;
     isMobile: boolean;
     expandedTools: Set<string>;
     onToggleTool: (toolId: string) => void;
@@ -372,6 +373,7 @@ type AggregatedRow =
 interface ExpandableToolRowProps {
     activity: TurnActivityPart;
     isExpanded: boolean;
+    syntaxTheme: Record<string, React.CSSProperties>;
     isMobile: boolean;
     onToggleTool: (toolId: string) => void;
     onShowPopup: (content: ToolPopupContent) => void;
@@ -383,6 +385,7 @@ interface ExpandableToolRowProps {
 const ExpandableToolRow: React.FC<ExpandableToolRowProps> = ({
     activity,
     isExpanded,
+    syntaxTheme,
     isMobile,
     onToggleTool,
     onShowPopup,
@@ -399,6 +402,7 @@ const ExpandableToolRow: React.FC<ExpandableToolRowProps> = ({
             part={activity.part as ToolPartType}
             isExpanded={isExpanded}
             onToggle={handleToggle}
+            syntaxTheme={syntaxTheme}
             isMobile={isMobile}
             onContentChange={onContentChange}
             onShowPopup={onShowPopup}
@@ -421,6 +425,7 @@ const ExpandableToolRow: React.FC<ExpandableToolRowProps> = ({
 
 const MemoExpandableToolRow = React.memo(ExpandableToolRow, (prev, next) => {
     return prev.isExpanded === next.isExpanded
+        && prev.syntaxTheme === next.syntaxTheme
         && prev.isMobile === next.isMobile
         && prev.onToggleTool === next.onToggleTool
         && prev.onShowPopup === next.onShowPopup
@@ -821,6 +826,7 @@ const ProgressiveGroup: React.FC<ProgressiveGroupProps> = ({
     isExpanded,
     collapsedPreviewCount = 0,
     onToggle,
+    syntaxTheme,
     isMobile,
     expandedTools,
     onToggleTool,
@@ -909,6 +915,7 @@ const ProgressiveGroup: React.FC<ProgressiveGroupProps> = ({
                         key={row.activity.id}
                         activity={row.activity}
                         isExpanded={expandedTools.has(row.activity.id)}
+                        syntaxTheme={syntaxTheme}
                         isMobile={isMobile}
                         onToggleTool={onToggleTool}
                         onShowPopup={onShowPopup}
@@ -935,6 +942,7 @@ const ProgressiveGroup: React.FC<ProgressiveGroupProps> = ({
                         key={row.activity.id}
                         activity={row.activity}
                         isExpanded={expandedTools.has(row.activity.id)}
+                        syntaxTheme={syntaxTheme}
                         isMobile={isMobile}
                         onToggleTool={onToggleTool}
                         onShowPopup={onShowPopup}

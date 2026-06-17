@@ -6,13 +6,7 @@ import { classHighlighter, tags as t } from '@lezer/highlight';
 
 import type { Theme } from '@/types/theme';
 
-export function createFlexokiCodeMirrorTheme(
-  theme: Theme,
-  // When syntax colors are provided elsewhere (e.g. the Shiki decoration
-  // extension), pass `{ syntaxColors: false }` to keep only the editor UI theme
-  // (gutters, selection, cursor) and avoid a competing token color source.
-  options?: { syntaxColors?: boolean },
-): Extension {
+export function createFlexokiCodeMirrorTheme(theme: Theme): Extension {
   const isDark = theme.metadata.variant === 'dark';
 
   const monoFont = theme.config?.fonts?.mono || 'monospace';
@@ -559,10 +553,6 @@ export function createFlexokiCodeMirrorTheme(
       color: tokens.punctuation || theme.colors.syntax.base.comment,
     },
   ]);
-
-  if (options?.syntaxColors === false) {
-    return [ui];
-  }
 
   return [
     ui,

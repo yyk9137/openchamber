@@ -17,6 +17,7 @@ interface TurnActivityProps {
     isExpanded: boolean;
     collapsedPreviewCount?: number;
     onToggle: () => void;
+    syntaxTheme: Record<string, React.CSSProperties>;
     isMobile: boolean;
     expandedTools: Set<string>;
     onToggleTool: (toolId: string) => void;

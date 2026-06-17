@@ -29,51 +29,43 @@ export const createNotificationEmitterRuntime = (dependencies) => {
   const emitDesktopNotification = (payload) => {
     const desktopNotifyEnabled = getDesktopNotifyEnabled();
     if (!desktopNotifyEnabled) {
-      return false;
+      return;
     }
 
     if (!payload || typeof payload !== 'object') {
-      return false;
+      return;
     }
 
     if (onDesktopNotification) {
       try {
         onDesktopNotification(payload);
-        return true;
       } catch {
         // ignore host-side throw
       }
-      return false;
+      return;
     }
 
     try {
       // stdout fallback for runtimes that parse the one-line `${prefix}{json}` protocol.
       process.stdout.write(`${desktopNotifyPrefix}${JSON.stringify(payload)}\n`);
-      return true;
     } catch {
       // ignore
     }
-
-    return false;
   };
 
-  const broadcastUiNotification = (payload, options = {}) => {
+  const broadcastUiNotification = (payload) => {
     const desktopNotifyEnabled = getDesktopNotifyEnabled();
     if (!payload || typeof payload !== 'object') {
       return;
     }
 
-    const desktopNotificationDelivered = options.desktopNotificationDelivered === true;
-
     const syntheticPayload = {
       type: 'openchamber:notification',
       properties: {
         ...payload,
-        // Tell local desktop UI whether a native channel already accepted this
-        // notification. If so, the SSE/WS event is informational only and must
-        // not create a second OS notification.
-        desktopNotificationDelivered,
-        // Legacy marker retained for older clients that only know about stdout.
+        // Tell the UI whether the stdout notification channel is active.
+        // When true, the desktop UI should skip this SSE notification to avoid duplicates.
+        // When false, the UI must handle this SSE notification itself.
         desktopStdoutActive: desktopNotifyEnabled,
       },
     };

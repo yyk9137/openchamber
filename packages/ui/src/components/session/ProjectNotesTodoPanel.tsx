@@ -50,13 +50,6 @@ import { TodoSendDialog, type TodoSendExecution } from './TodoSendDialog';
 const TODO_PANEL_MIN_ITEMS = 5;
 const TODO_PANEL_MAX_ITEMS = 15;
 
-// Per-project chain of in-flight saveProjectNotesAndTodos calls. Subsequent
-// saves await the previous one so a fast todo toggle or blur that lands
-// while the debounced notes save is still on the wire is appended, not
-// racing against it. The chain is module-scoped so it survives remounts
-// (e.g. when the user switches the right sidebar tab away and back).
-const projectSaveChainByProject = new Map<string, Promise<unknown>>();
-
 const getEffectiveItemHeight = (padding: number) => {
   const scale = Math.sqrt(padding / 100);
   const paddingPx = 12 * scale;
@@ -177,7 +170,6 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
   const [contextReloadTick, setContextReloadTick] = React.useState(0);
   const notesHydratedRef = React.useRef(false);
   const lastSavedNotesRef = React.useRef('');
-  const notesDebounceTimerRef = React.useRef<number | null>(null);
   const todoPanelHeight = useUIStore((state) => state.todoPanelHeight);
   const setTodoPanelHeight = useUIStore((state) => state.setTodoPanelHeight);
   const notesPanelHeight = useUIStore((state) => state.notesPanelHeight);
@@ -203,28 +195,14 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
       if (!projectRef) {
         return false;
       }
-      const key = projectRef.id;
-      // Serialize concurrent saves per project: a fast toggle/strike while the
-      // debounce-driven notes save is in flight no longer races the network.
-      const previous = projectSaveChainByProject.get(key) ?? Promise.resolve();
-      const next = previous.catch(() => undefined).then(() =>
-        saveProjectNotesAndTodos(projectRef, {
-          notes: nextNotes,
-          todos: nextTodos,
-        })
-      );
-      projectSaveChainByProject.set(key, next);
-      try {
-        const saved = await next;
-        if (!saved) {
-          toast.error(t('rightSidebar.contextNotesTodo.toast.saveNotesFailed'));
-        }
-        return saved;
-      } finally {
-        if (projectSaveChainByProject.get(key) === next) {
-          projectSaveChainByProject.delete(key);
-        }
+      const saved = await saveProjectNotesAndTodos(projectRef, {
+        notes: nextNotes,
+        todos: nextTodos,
+      });
+      if (!saved) {
+        toast.error(t('rightSidebar.contextNotesTodo.toast.saveNotesFailed'));
       }
+      return saved;
     },
     [projectRef, t]
   );
@@ -306,10 +284,7 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
     }
     const targetHeight = getPanelHeightForItems(todos.length, padding);
     const minHeight = getEffectiveItemHeight(padding) * TODO_PANEL_MIN_ITEMS;
-    if (
-      todoPanelHeight !== targetHeight
-      && (todoPanelHeight < minHeight || todoPanelHeight > targetHeight)
-    ) {
+    if (todoPanelHeight < minHeight || todoPanelHeight > targetHeight) {
       setTodoPanelHeight(targetHeight);
     }
   }, [todos.length, padding, todoPanelHeight, setTodoPanelHeight]);
@@ -350,18 +325,10 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
     event.preventDefault();
   }, [todoPanelHeight]);
 
-  const cancelNotesDebounce = React.useCallback(() => {
-    if (notesDebounceTimerRef.current !== null) {
-      window.clearTimeout(notesDebounceTimerRef.current);
-      notesDebounceTimerRef.current = null;
-    }
-  }, []);
-
   const handleNotesBlur = React.useCallback(() => {
-    cancelNotesDebounce();
     lastSavedNotesRef.current = notes;
     void persistProjectData(notes, todos);
-  }, [cancelNotesDebounce, notes, persistProjectData, todos]);
+  }, [notes, persistProjectData, todos]);
 
   React.useEffect(() => {
     if (!projectRef || !notesHydratedRef.current) {
@@ -372,18 +339,15 @@ export const ProjectNotesTodoPanel: React.FC<ProjectNotesTodoPanelProps> = ({
       return;
     }
 
-    notesDebounceTimerRef.current = window.setTimeout(() => {
-      notesDebounceTimerRef.current = null;
+    const timer = window.setTimeout(() => {
       lastSavedNotesRef.current = notes;
       void persistProjectData(notes, todos);
     }, 400);
 
     return () => {
-      cancelNotesDebounce();
+      window.clearTimeout(timer);
     };
-  }, [cancelNotesDebounce, notes, persistProjectData, projectRef, todos]);
-
-  React.useEffect(() => () => cancelNotesDebounce(), [cancelNotesDebounce]);
+  }, [notes, persistProjectData, projectRef, todos]);
 
   const handleAddTodo = React.useCallback(() => {
     const trimmed = newTodoText.trim();

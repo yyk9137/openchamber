@@ -84,17 +84,11 @@ export const createNotificationTemplateRuntime = (deps) => {
       : text;
   };
 
-  const isNotificationTextPart = (part) => {
-    if (!part || typeof part !== 'object') return false;
-    if (part.type !== 'text') return false;
-    return typeof part.text === 'string' || typeof part.content === 'string';
-  };
-
   const extractTextFromParts = (parts, maxLength = NOTIFICATION_BODY_MAX_CHARS) => {
     if (!Array.isArray(parts) || parts.length === 0) return '';
 
     const textParts = parts
-      .filter(isNotificationTextPart)
+      .filter((part) => part && (part.type === 'text' || typeof part.text === 'string' || typeof part.content === 'string'))
       .map((part) => part.text || part.content || '')
       .filter(Boolean);
 
@@ -118,7 +112,7 @@ export const createNotificationTemplateRuntime = (deps) => {
     const content = info.content;
     if (Array.isArray(content)) {
       const textContent = content
-        .filter(isNotificationTextPart)
+        .filter((entry) => entry && (entry.type === 'text' || typeof entry.text === 'string'))
         .map((entry) => entry.text || '')
         .filter(Boolean);
       if (textContent.length > 0) {

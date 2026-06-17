@@ -1520,7 +1520,7 @@ const extractNotificationTextFromParts = (parts: unknown): string => {
     .map((part) => {
       if (!part || typeof part !== 'object') return '';
       const entry = part as { type?: unknown; text?: unknown; content?: unknown };
-      if (entry.type === 'text') {
+      if (entry.type === 'text' || typeof entry.text === 'string' || typeof entry.content === 'string') {
         return typeof entry.text === 'string' ? entry.text : typeof entry.content === 'string' ? entry.content : '';
       }
       return '';

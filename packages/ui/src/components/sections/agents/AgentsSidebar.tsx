@@ -181,31 +181,19 @@ export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) =>
     }
 
     setIsConfirmActionPending(true);
-    try {
-      const success = await deleteAgent(confirmActionAgent.name, (confirmActionAgent as Agent & { scope?: AgentScope }).scope);
+    const success = await deleteAgent(confirmActionAgent.name);
 
-      if (success) {
-        if (confirmActionType === 'delete') {
-          toast.success(t('settings.agents.sidebar.toast.agentDeleted', { name: confirmActionAgent.name }));
-        } else {
-          toast.success(t('settings.agents.sidebar.toast.agentReset', { name: confirmActionAgent.name }));
-        }
-        closeConfirmActionDialog();
-      } else if (confirmActionType === 'delete') {
-        toast.error(t('settings.agents.sidebar.toast.deleteFailed'));
-      } else {
-        toast.error(t('settings.agents.sidebar.toast.resetFailed'));
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      const definitionMissing = /built-in|not deletable|not found/i.test(message);
+    if (success) {
       if (confirmActionType === 'delete') {
-        toast.error(definitionMissing
-          ? t('settings.agents.sidebar.toast.definitionNotFound')
-          : t('settings.agents.sidebar.toast.deleteFailed'));
+        toast.success(t('settings.agents.sidebar.toast.agentDeleted', { name: confirmActionAgent.name }));
       } else {
-        toast.error(t('settings.agents.sidebar.toast.resetFailed'));
+        toast.success(t('settings.agents.sidebar.toast.agentReset', { name: confirmActionAgent.name }));
       }
+      closeConfirmActionDialog();
+    } else if (confirmActionType === 'delete') {
+      toast.error(t('settings.agents.sidebar.toast.deleteFailed'));
+    } else {
+      toast.error(t('settings.agents.sidebar.toast.resetFailed'));
     }
 
     setIsConfirmActionPending(false);
@@ -288,7 +276,7 @@ export const AgentsSidebar: React.FC<AgentsSidebarProps> = ({ onItemSelect }) =>
 
     if (success) {
       // Delete old agent
-      const deleteSuccess = await deleteAgent(renameDialogAgent.name, renameExt.scope);
+      const deleteSuccess = await deleteAgent(renameDialogAgent.name);
       if (deleteSuccess) {
         toast.success(`Agent renamed to "${sanitizedName}"`);
         setSelectedAgent(sanitizedName);
