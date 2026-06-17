@@ -14,10 +14,20 @@ export const collectSubtreeContainingId = (
   result: Set<string>,
 ): void => {
   if (!targetId) return;
-  for (const node of nodes) {
-    if (nodeContainsSessionId(node, targetId)) {
+
+  const visit = (node: SessionNode): boolean => {
+    let containsTarget = node.session.id === targetId;
+    for (const child of node.children) {
+      containsTarget = visit(child) || containsTarget;
+    }
+    if (containsTarget) {
       result.add(node.session.id);
     }
+    return containsTarget;
+  };
+
+  for (const node of nodes) {
+    visit(node);
   }
 };
 

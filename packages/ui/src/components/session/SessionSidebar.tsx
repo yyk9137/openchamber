@@ -156,6 +156,12 @@ const SIDEBAR_PR_NO_PR_RETRY_MS = 5 * 60_000;
 
 const EMPTY_SUBTREE_SET: Set<string> = new Set();
 
+const useStableRenderCallback = <Args extends unknown[], Return>(handler: (...args: Args) => Return): ((...args: Args) => Return) => {
+  const handlerRef = React.useRef(handler);
+  handlerRef.current = handler;
+  return React.useCallback((...args: Args) => handlerRef.current(...args), []);
+};
+
 interface SessionSidebarProps {
   mobileVariant?: boolean;
   onSessionSelected?: (sessionId: string) => void;
@@ -758,6 +764,16 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     [collapsedFolderIds, toggleFolderCollapse, createFolder, t],
   );
 
+  const stableHandleSessionSelect = useStableRenderCallback(handleSessionSelect);
+  const stableHandleSessionDoubleClick = useStableRenderCallback(handleSessionDoubleClick);
+  const stableHandleSaveEdit = useStableRenderCallback(handleSaveEdit);
+  const stableHandleCancelEdit = useStableRenderCallback(handleCancelEdit);
+  const stableHandleShareSession = useStableRenderCallback(handleShareSession);
+  const stableHandleCopyShareUrl = useStableRenderCallback(handleCopyShareUrl);
+  const stableHandleUnshareSession = useStableRenderCallback(handleUnshareSession);
+  const stableHandleDeleteSession = useStableRenderCallback(handleDeleteSession);
+  const stableCreateFolderAndStartRename = useStableRenderCallback(createFolderAndStartRename);
+
   const showMoreGroupSessions = React.useCallback((groupId: string, currentVisibleCount: number) => {
     setVisibleSessionCountByGroup((prev) => {
       const next = new Map(prev);
@@ -986,7 +1002,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     </div>
   );
 
-  const { currentSessionDirectory } = useProjectSessionSelection({
+  useProjectSessionSelection({
     projectSections,
     activeProjectId,
     activeSessionByProject,
@@ -1270,13 +1286,13 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     projectHeaderSentinelRefs,
   });
 
-  const renderSessionNode = React.useCallback(
+  const renderSessionNode = useStableRenderCallback(
     (
       node: SessionNode,
-      depth = 0,
+      depth: number = 0,
       groupDirectory?: string | null,
       projectId?: string | null,
-      archivedBucket = false,
+      archivedBucket: boolean = false,
       secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
       renderContext: 'project' | 'recent' = 'project',
       renderExtras?: {
@@ -1308,16 +1324,16 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         setEditingId={setEditingId}
         editTitle={editTitle}
         setEditTitle={setEditTitle}
-        handleSaveEdit={handleSaveEdit}
-        handleCancelEdit={handleCancelEdit}
+        handleSaveEdit={stableHandleSaveEdit}
+        handleCancelEdit={stableHandleCancelEdit}
         toggleParent={toggleParent}
-        handleSessionSelect={handleSessionSelect}
-        handleSessionDoubleClick={handleSessionDoubleClick}
+        handleSessionSelect={stableHandleSessionSelect}
+        handleSessionDoubleClick={stableHandleSessionDoubleClick}
         togglePinnedSession={togglePinnedSession}
-        handleShareSession={handleShareSession}
+        handleShareSession={stableHandleShareSession}
         copiedSessionId={copiedSessionId}
-        handleCopyShareUrl={handleCopyShareUrl}
-        handleUnshareSession={handleUnshareSession}
+        handleCopyShareUrl={stableHandleCopyShareUrl}
+        handleUnshareSession={stableHandleUnshareSession}
         openSidebarMenuKey={openSidebarMenuKey}
         setOpenSidebarMenuKey={setOpenSidebarMenuKey}
         renamingFolderId={renamingFolderId}
@@ -1325,9 +1341,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         getSessionFolderId={getSessionFolderId}
         removeSessionFromFolder={removeSessionFromFolder}
         addSessionToFolder={addSessionToFolder}
-        createFolderAndStartRename={createFolderAndStartRename}
+        createFolderAndStartRename={stableCreateFolderAndStartRename}
         openContextPanelTab={openContextPanelTab}
-        handleDeleteSession={handleDeleteSession}
+        handleDeleteSession={stableHandleDeleteSession}
         mobileVariant={mobileVariant}
         alwaysShowActions={alwaysShowSidebarActions}
         renderSessionNode={renderSessionNode}
@@ -1341,41 +1357,6 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         liveSessionById={liveSessionById}
       />
     ),
-    [
-      currentSessionId,
-      pinnedSessionIds,
-      expandedParents,
-      hasSessionSearchQuery,
-      normalizedSessionSearchQuery,
-      notifyOnSubtasks,
-      editingId,
-      setEditingId,
-      editTitle,
-      setEditTitle,
-      handleSaveEdit,
-      handleCancelEdit,
-      toggleParent,
-      handleSessionSelect,
-      handleSessionDoubleClick,
-      togglePinnedSession,
-      handleShareSession,
-      copiedSessionId,
-      handleCopyShareUrl,
-      handleUnshareSession,
-      openSidebarMenuKey,
-      setOpenSidebarMenuKey,
-      renamingFolderId,
-      getFoldersForScope,
-      getSessionFolderId,
-      removeSessionFromFolder,
-      addSessionToFolder,
-      createFolderAndStartRename,
-      openContextPanelTab,
-      handleDeleteSession,
-      mobileVariant,
-      alwaysShowSidebarActions,
-      liveSessionById,
-    ],
   );
 
   const toggleCollapsedGroup = React.useCallback((key: string) => {
@@ -1438,7 +1419,6 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         showDeletionDialog={showDeletionDialog}
         setDeleteFolderConfirm={setDeleteFolderConfirm}
         renderSessionNode={renderSessionNode}
-        currentSessionDirectory={currentSessionDirectory}
         projectRepoStatus={projectRepoStatus}
         lastRepoStatus={lastRepoStatusRef.current}
         showMoreGroupSessions={showMoreGroupSessions}
@@ -1451,16 +1431,19 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
         setSessionSwitcherOpen={setSessionSwitcherOpen}
         openNewSessionDraft={openNewSessionDraftFromTree}
         addSessionToFolder={addSessionToFolder}
-        createFolderAndStartRename={createFolderAndStartRename}
+        createFolderAndStartRename={stableCreateFolderAndStartRename}
         renamingFolderId={renamingFolderId}
         renameFolderDraft={renameFolderDraft}
         setRenameFolderDraft={setRenameFolderDraft}
         setRenamingFolderId={setRenamingFolderId}
         pinnedSessionIds={pinnedSessionIds}
+        expandedParents={expandedParents}
         sessionOrderIndex={sessionOrderIndex}
         currentSessionId={currentSessionId}
         editingId={editingId}
+        editTitle={editTitle}
         openSidebarMenuKey={openSidebarMenuKey}
+        liveSessionById={liveSessionById}
         prVisualStateByDirectoryBranch={prVisualStateByDirectoryBranch}
         onToggleCollapsedGroup={toggleCollapsedGroup}
         dragHandleProps={dragHandleProps}
@@ -1480,7 +1463,6 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       deleteFolder,
       showDeletionDialog,
       renderSessionNode,
-      currentSessionDirectory,
       projectRepoStatus,
       showMoreGroupSessions,
       resetGroupSessionLimit,
@@ -1492,14 +1474,17 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       setSessionSwitcherOpen,
       openNewSessionDraftFromTree,
       addSessionToFolder,
-      createFolderAndStartRename,
+      stableCreateFolderAndStartRename,
       renamingFolderId,
       renameFolderDraft,
       pinnedSessionIds,
+      expandedParents,
       sessionOrderIndex,
       currentSessionId,
       editingId,
+      editTitle,
       openSidebarMenuKey,
+      liveSessionById,
       prVisualStateByDirectoryBranch,
       toggleCollapsedGroup,
     ],
@@ -1509,6 +1494,9 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
     <SidebarActivitySections
       sections={activitySections}
       renderSessionNode={renderSessionNode}
+      currentSessionId={currentSessionId}
+      editingId={editingId}
+      openSidebarMenuKey={openSidebarMenuKey}
       variant="section"
     />
   ) : null;

@@ -26,6 +26,7 @@ import { compareSessionsByPinnedAndTime, isBranchDifferentFromLabel, normalizePa
 import {
   collectSubtreeContainingId,
   computeNodeStructureKey,
+  nodeContainsSessionId,
   resolveMenuOpenSessionId,
 } from './sessionNodeItemUtils';
 import type { SessionFolder } from '@/stores/useSessionFoldersStore';
@@ -81,7 +82,6 @@ type Props = {
       };
     },
   ) => React.ReactNode;
-  currentSessionDirectory: string | null;
   projectRepoStatus: Map<string, boolean | null>;
   lastRepoStatus: boolean;
   showMoreGroupSessions: (groupKey: string, currentVisibleCount: number) => void;
@@ -100,10 +100,13 @@ type Props = {
   setRenameFolderDraft: React.Dispatch<React.SetStateAction<string>>;
   setRenamingFolderId: React.Dispatch<React.SetStateAction<string | null>>;
   pinnedSessionIds: Set<string>;
+  expandedParents: Set<string>;
   sessionOrderIndex: Map<string, number>;
   currentSessionId: string | null;
   editingId: string | null;
+  editTitle: string;
   openSidebarMenuKey: string | null;
+  liveSessionById: Map<string, Session>;
   prVisualStateByDirectoryBranch: Map<string, {
     visualState: 'draft' | 'open' | 'blocked' | 'merged' | 'closed';
     number: number;
@@ -139,6 +142,73 @@ type Props = {
   scrollContainerRef?: React.RefObject<HTMLElement | null>;
 };
 
+const groupContainsSessionId = (group: SessionGroup, sessionId: string | null): boolean => {
+  if (!sessionId) return false;
+  return group.sessions.some((node) => nodeContainsSessionId(node, sessionId));
+};
+
+const groupHasPinnedMembershipChange = (
+  group: SessionGroup,
+  prevPinnedSessionIds: Set<string>,
+  nextPinnedSessionIds: Set<string>,
+): boolean => {
+  const visit = (node: SessionNode): boolean => {
+    const sessionId = node.session.id;
+    if (prevPinnedSessionIds.has(sessionId) !== nextPinnedSessionIds.has(sessionId)) return true;
+    return node.children.some(visit);
+  };
+  return group.sessions.some(visit);
+};
+
+const groupHasSessionOrderChange = (
+  group: SessionGroup,
+  prevSessionOrderIndex: Map<string, number>,
+  nextSessionOrderIndex: Map<string, number>,
+): boolean => {
+  const visit = (node: SessionNode): boolean => {
+    const sessionId = node.session.id;
+    if (prevSessionOrderIndex.get(sessionId) !== nextSessionOrderIndex.get(sessionId)) return true;
+    return node.children.some(visit);
+  };
+  return group.sessions.some(visit);
+};
+
+const groupHasExpansionMembershipChange = (
+  group: SessionGroup,
+  prevExpandedParents: Set<string>,
+  nextExpandedParents: Set<string>,
+): boolean => {
+  const bucketTag = group.isArchivedBucket ? 'archived' : 'active';
+  const visit = (node: SessionNode): boolean => {
+    const key = `project:${bucketTag}:${node.session.id}`;
+    if (prevExpandedParents.has(key) !== nextExpandedParents.has(key)) return true;
+    return node.children.some(visit);
+  };
+  return group.sessions.some(visit);
+};
+
+const groupHasResolvedSessionChange = (
+  group: SessionGroup,
+  prevLiveSessionById: Map<string, Session>,
+  nextLiveSessionById: Map<string, Session>,
+): boolean => {
+  const visit = (node: SessionNode): boolean => {
+    const sessionId = node.session.id;
+    if ((prevLiveSessionById.get(sessionId) ?? node.session) !== (nextLiveSessionById.get(sessionId) ?? node.session)) {
+      return true;
+    }
+    return node.children.some(visit);
+  };
+  return group.sessions.some(visit);
+};
+
+const getProjectRepoStatusValue = (props: Props): boolean | null | undefined => {
+  if (!props.projectId) return undefined;
+  return props.projectRepoStatus.has(props.projectId)
+    ? props.projectRepoStatus.get(props.projectId)
+    : undefined;
+};
+
 const areGroupPropsEqual = (prev: Props, next: Props): boolean => {
   // Bail on Object.is for the props that drive the most work: the group
   // itself, its key, and the group-level chrome. These change rarely and
@@ -150,6 +220,57 @@ const areGroupPropsEqual = (prev: Props, next: Props): boolean => {
   if (prev.compactBodyPadding !== next.compactBodyPadding) return false;
   if (prev.groupSearchDataByGroup !== next.groupSearchDataByGroup) return false;
   if (prev.visibleSessionCount !== next.visibleSessionCount) return false;
+
+  if (prev.collapsedGroups !== next.collapsedGroups
+    && prev.collapsedGroups.has(prev.groupKey) !== next.collapsedGroups.has(next.groupKey)) {
+    return false;
+  }
+
+  if (prev.projectRepoStatus !== next.projectRepoStatus
+    && getProjectRepoStatusValue(prev) !== getProjectRepoStatusValue(next)) {
+    return false;
+  }
+
+  if (prev.pinnedSessionIds !== next.pinnedSessionIds
+    && groupHasPinnedMembershipChange(next.group, prev.pinnedSessionIds, next.pinnedSessionIds)) {
+    return false;
+  }
+
+  if (prev.expandedParents !== next.expandedParents
+    && groupHasExpansionMembershipChange(next.group, prev.expandedParents, next.expandedParents)) {
+    return false;
+  }
+
+  if (prev.sessionOrderIndex !== next.sessionOrderIndex
+    && groupHasSessionOrderChange(next.group, prev.sessionOrderIndex, next.sessionOrderIndex)) {
+    return false;
+  }
+
+  if (prev.currentSessionId !== next.currentSessionId
+    && (groupContainsSessionId(prev.group, prev.currentSessionId) || groupContainsSessionId(next.group, next.currentSessionId))) {
+    return false;
+  }
+
+  if (prev.editingId !== next.editingId
+    && (groupContainsSessionId(prev.group, prev.editingId) || groupContainsSessionId(next.group, next.editingId))) {
+    return false;
+  }
+
+  if (prev.editTitle !== next.editTitle
+    && (groupContainsSessionId(prev.group, prev.editingId) || groupContainsSessionId(next.group, next.editingId))) {
+    return false;
+  }
+
+  if (prev.openSidebarMenuKey !== next.openSidebarMenuKey) {
+    const prevMenuSessionId = resolveMenuOpenSessionId(prev.group.sessions, prev.openSidebarMenuKey, 'project', Boolean(prev.group.isArchivedBucket));
+    const nextMenuSessionId = resolveMenuOpenSessionId(next.group.sessions, next.openSidebarMenuKey, 'project', Boolean(next.group.isArchivedBucket));
+    if (prevMenuSessionId || nextMenuSessionId) return false;
+  }
+
+  if (prev.liveSessionById !== next.liveSessionById
+    && groupHasResolvedSessionChange(next.group, prev.liveSessionById, next.liveSessionById)) {
+    return false;
+  }
 
   // Per-row / per-state props. The PR-visual-state map flips frequently
   // during bootstrap but a single group's value is usually stable, so we
@@ -171,7 +292,6 @@ const areGroupPropsEqual = (prev: Props, next: Props): boolean => {
   return (
     prev.hasSessionSearchQuery === next.hasSessionSearchQuery
     && prev.normalizedSessionSearchQuery === next.normalizedSessionSearchQuery
-    && prev.collapsedGroups === next.collapsedGroups
     && prev.hideDirectoryControls === next.hideDirectoryControls
     && prev.collapsedFolderIds === next.collapsedFolderIds
     && prev.toggleFolderCollapse === next.toggleFolderCollapse
@@ -180,8 +300,6 @@ const areGroupPropsEqual = (prev: Props, next: Props): boolean => {
     && prev.showDeletionDialog === next.showDeletionDialog
     && prev.setDeleteFolderConfirm === next.setDeleteFolderConfirm
     && prev.renderSessionNode === next.renderSessionNode
-    && prev.currentSessionDirectory === next.currentSessionDirectory
-    && prev.projectRepoStatus === next.projectRepoStatus
     && prev.lastRepoStatus === next.lastRepoStatus
     && prev.showMoreGroupSessions === next.showMoreGroupSessions
     && prev.resetGroupSessionLimit === next.resetGroupSessionLimit
@@ -198,11 +316,6 @@ const areGroupPropsEqual = (prev: Props, next: Props): boolean => {
     && prev.renameFolderDraft === next.renameFolderDraft
     && prev.setRenameFolderDraft === next.setRenameFolderDraft
     && prev.setRenamingFolderId === next.setRenamingFolderId
-    && prev.pinnedSessionIds === next.pinnedSessionIds
-    && prev.sessionOrderIndex === next.sessionOrderIndex
-    && prev.currentSessionId === next.currentSessionId
-    && prev.editingId === next.editingId
-    && prev.openSidebarMenuKey === next.openSidebarMenuKey
     && prev.onToggleCollapsedGroup === next.onToggleCollapsedGroup
     && prev.dragHandleProps === next.dragHandleProps
     && prev.scrollContainerRef === next.scrollContainerRef

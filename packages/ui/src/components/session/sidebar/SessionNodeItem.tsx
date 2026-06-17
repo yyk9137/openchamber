@@ -25,6 +25,7 @@ import { buildSessionMessageRecordsSnapshot, useDirectoryStore, useGlobalSession
 import { useSync } from '@/sync/use-sync';
 import { useViewportStore, viewportSessionKey } from '@/sync/viewport-store';
 import { DraggableSessionRow } from './sessionFolderDnd';
+import { nodeContainsSessionId } from './sessionNodeItemUtils';
 import type { SessionNode } from './types';
 import { formatSessionCompactDateLabel, formatSessionDateLabel, normalizePath, renderHighlightedText } from './utils';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
@@ -61,7 +62,7 @@ type Props = {
   setEditingId: (id: string | null) => void;
   editTitle: string;
   setEditTitle: (value: string) => void;
-  handleSaveEdit: () => void;
+  handleSaveEdit: (titleOverride?: string) => void;
   handleCancelEdit: () => void;
   toggleParent: (expansionKey: string) => void;
   handleSessionSelect: (sessionId: string, sessionDirectory: string | null, projectId?: string | null) => void;
@@ -248,6 +249,10 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   const pendingRenameRef = React.useRef<{ id: string; title: string } | null>(null);
   const handleSaveEditRef = React.useRef(handleSaveEdit);
   handleSaveEditRef.current = handleSaveEdit;
+  const [renameDraft, setRenameDraft] = React.useState(editTitle);
+  const renameDraftRef = React.useRef(renameDraft);
+  renameDraftRef.current = renameDraft;
+  const renameTargetRef = React.useRef<string | null>(null);
   const formRef = React.useRef<HTMLFormElement>(null);
 
   const session = node.session;
@@ -429,12 +434,24 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
     if (editingId !== session.id) return;
     const handleDocMouseDown = (e: MouseEvent) => {
       if (formRef.current && !formRef.current.contains(e.target as Node)) {
-        handleSaveEditRef.current();
+        handleSaveEditRef.current(renameDraftRef.current);
       }
     };
     document.addEventListener('mousedown', handleDocMouseDown);
     return () => document.removeEventListener('mousedown', handleDocMouseDown);
   }, [editingId, session.id]);
+
+  React.useLayoutEffect(() => {
+    if (editingId !== session.id) {
+      if (renameTargetRef.current === session.id) {
+        renameTargetRef.current = null;
+      }
+      return;
+    }
+    if (renameTargetRef.current === session.id) return;
+    renameTargetRef.current = session.id;
+    setRenameDraft(editTitle);
+  }, [editingId, editTitle, session.id]);
 
   if (editingId === session.id) {
     return (
@@ -448,23 +465,20 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
             className="flex w-full items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
-              handleSaveEdit();
+              handleSaveEdit(renameDraft);
             }}
           >
             <input
-              value={editTitle}
-              onChange={(event) => setEditTitle(event.target.value)}
+              value={renameDraft}
+              onChange={(event) => setRenameDraft(event.target.value)}
               className="flex-1 min-w-0 bg-transparent typography-ui-label outline-none placeholder:text-muted-foreground"
               autoFocus
               placeholder={t('sessions.sidebar.session.menu.rename')}
               onKeyDown={(event) => {
+                event.stopPropagation();
                 if (event.key === 'Escape') {
-                  event.stopPropagation();
                   handleCancelEdit();
                   return;
-                }
-                if (event.key === ' ' || event.key === 'Enter') {
-                  event.stopPropagation();
                 }
               }}
             />
@@ -1189,4 +1203,193 @@ function SessionNodeItemComponent(props: Props): React.ReactNode {
   );
 }
 
-export const SessionNodeItem = SessionNodeItemComponent;
+const getNodeSessionDirectory = (node: SessionNode): string | null => {
+  return normalizePath((node.session as Session & { directory?: string | null }).directory ?? null);
+};
+
+const isSecondaryMetaEqual = (prev?: SecondaryMeta | null, next?: SecondaryMeta | null): boolean => {
+  return (prev?.projectLabel ?? null) === (next?.projectLabel ?? null)
+    && (prev?.branchLabel ?? null) === (next?.branchLabel ?? null);
+};
+
+const getMenuSessionIdFromKey = (props: Props): string | null => {
+  if (!props.openSidebarMenuKey) return null;
+  const bucketTag = props.archivedBucket ? 'archived' : 'active';
+  const prefix = `${props.renderContext ?? 'project'}:${bucketTag}:`;
+  return props.openSidebarMenuKey.startsWith(prefix)
+    ? props.openSidebarMenuKey.slice(prefix.length)
+    : null;
+};
+
+const getRelevantMenuSessionId = (props: Props): string | null => {
+  return props.menuOpenSessionId ?? getMenuSessionIdFromKey(props);
+};
+
+const subtreeContainsSession = (
+  props: Props,
+  sessionId: string | null,
+  precomputed: Set<string>,
+): boolean => {
+  if (!sessionId) return false;
+  if (precomputed.has(props.node.session.id)) return true;
+  return nodeContainsSessionId(props.node, sessionId);
+};
+
+const hasSetMembershipChangeInNode = (
+  prevNode: SessionNode,
+  nextNode: SessionNode,
+  prevSet: Set<string>,
+  nextSet: Set<string>,
+  getKey: (node: SessionNode) => string,
+): boolean => {
+  if (prevNode.session.id !== nextNode.session.id) return true;
+  const key = getKey(prevNode);
+  if (prevSet.has(key) !== nextSet.has(key)) return true;
+  if (prevNode.children.length !== nextNode.children.length) return true;
+  for (let i = 0; i < prevNode.children.length; i += 1) {
+    if (hasSetMembershipChangeInNode(prevNode.children[i], nextNode.children[i], prevSet, nextSet, getKey)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const hasResolvedSessionChangeInNode = (
+  prevNode: SessionNode,
+  nextNode: SessionNode,
+  prevLiveSessionById: Map<string, Session>,
+  nextLiveSessionById: Map<string, Session>,
+): boolean => {
+  if (prevNode.session.id !== nextNode.session.id) return true;
+  const sessionId = prevNode.session.id;
+  if ((prevLiveSessionById.get(sessionId) ?? prevNode.session) !== (nextLiveSessionById.get(sessionId) ?? nextNode.session)) {
+    return true;
+  }
+  if (prevNode.children.length !== nextNode.children.length) return true;
+  for (let i = 0; i < prevNode.children.length; i += 1) {
+    if (hasResolvedSessionChangeInNode(prevNode.children[i], nextNode.children[i], prevLiveSessionById, nextLiveSessionById)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const hasExpansionMembershipChange = (prev: Props, next: Props): boolean => {
+  if (prev.hasSessionSearchQuery || next.hasSessionSearchQuery) return false;
+  const prevBucketTag = prev.archivedBucket ? 'archived' : 'active';
+  const nextBucketTag = next.archivedBucket ? 'archived' : 'active';
+  return hasSetMembershipChangeInNode(
+    prev.node,
+    next.node,
+    prev.expandedParents,
+    next.expandedParents,
+    (node) => `${prev.renderContext ?? 'project'}:${prevBucketTag}:${node.session.id}`,
+  ) || hasSetMembershipChangeInNode(
+    prev.node,
+    next.node,
+    prev.expandedParents,
+    next.expandedParents,
+    (node) => `${next.renderContext ?? 'project'}:${nextBucketTag}:${node.session.id}`,
+  );
+};
+
+const areSessionNodeItemPropsEqual = (prev: Props, next: Props): boolean => {
+  if (prev.node.session.id !== next.node.session.id) return false;
+  if (prev.depth !== next.depth) return false;
+  if (prev.groupDirectory !== next.groupDirectory) return false;
+  if (prev.projectId !== next.projectId) return false;
+  if (prev.archivedBucket !== next.archivedBucket) return false;
+  if ((prev.renderContext ?? 'project') !== (next.renderContext ?? 'project')) return false;
+  if (prev.mobileVariant !== next.mobileVariant) return false;
+  if (prev.alwaysShowActions !== next.alwaysShowActions) return false;
+  if (prev.hasSessionSearchQuery !== next.hasSessionSearchQuery) return false;
+  if (prev.normalizedSessionSearchQuery !== next.normalizedSessionSearchQuery) return false;
+  if (prev.notifyOnSubtasks !== next.notifyOnSubtasks) return false;
+  if (prev.nodeStructureKey !== next.nodeStructureKey) return false;
+  if (getNodeSessionDirectory(prev.node) !== getNodeSessionDirectory(next.node)) return false;
+  if (!isSecondaryMetaEqual(prev.secondaryMeta, next.secondaryMeta)) return false;
+
+  if (hasResolvedSessionChangeInNode(prev.node, next.node, prev.liveSessionById, next.liveSessionById)) {
+    return false;
+  }
+
+  if (prev.pinnedSessionIds !== next.pinnedSessionIds
+    && hasSetMembershipChangeInNode(prev.node, next.node, prev.pinnedSessionIds, next.pinnedSessionIds, (node) => node.session.id)) {
+    return false;
+  }
+
+  if (prev.expandedParents !== next.expandedParents && hasExpansionMembershipChange(prev, next)) {
+    return false;
+  }
+
+  if (prev.currentSessionId !== next.currentSessionId
+    && (
+      subtreeContainsSession(prev, prev.currentSessionId, prev.subtreeContainsActive)
+      || subtreeContainsSession(next, next.currentSessionId, next.subtreeContainsActive)
+    )) {
+    return false;
+  }
+
+  if (prev.editingId !== next.editingId
+    && (
+      subtreeContainsSession(prev, prev.editingId, prev.subtreeContainsEditing)
+      || subtreeContainsSession(next, next.editingId, next.subtreeContainsEditing)
+    )) {
+    return false;
+  }
+
+  if (prev.editTitle !== next.editTitle
+    && (
+      subtreeContainsSession(prev, prev.editingId, prev.subtreeContainsEditing)
+      || subtreeContainsSession(next, next.editingId, next.subtreeContainsEditing)
+    )) {
+    return false;
+  }
+
+  if (prev.copiedSessionId !== next.copiedSessionId
+    && (
+      nodeContainsSessionId(prev.node, prev.copiedSessionId)
+      || nodeContainsSessionId(next.node, next.copiedSessionId)
+    )) {
+    return false;
+  }
+
+  if (prev.openSidebarMenuKey !== next.openSidebarMenuKey) {
+    const prevMenuSessionId = getRelevantMenuSessionId(prev);
+    const nextMenuSessionId = getRelevantMenuSessionId(next);
+    if (nodeContainsSessionId(prev.node, prevMenuSessionId) || nodeContainsSessionId(next.node, nextMenuSessionId)) {
+      return false;
+    }
+  }
+
+  if (prev.renamingFolderId !== next.renamingFolderId) {
+    const prevMenuSessionId = getRelevantMenuSessionId(prev);
+    const nextMenuSessionId = getRelevantMenuSessionId(next);
+    if (nodeContainsSessionId(prev.node, prevMenuSessionId) || nodeContainsSessionId(next.node, nextMenuSessionId)) {
+      return false;
+    }
+  }
+
+  return prev.setEditingId === next.setEditingId
+    && prev.setEditTitle === next.setEditTitle
+    && prev.handleSaveEdit === next.handleSaveEdit
+    && prev.handleCancelEdit === next.handleCancelEdit
+    && prev.toggleParent === next.toggleParent
+    && prev.handleSessionSelect === next.handleSessionSelect
+    && prev.handleSessionDoubleClick === next.handleSessionDoubleClick
+    && prev.togglePinnedSession === next.togglePinnedSession
+    && prev.handleShareSession === next.handleShareSession
+    && prev.handleCopyShareUrl === next.handleCopyShareUrl
+    && prev.handleUnshareSession === next.handleUnshareSession
+    && prev.setOpenSidebarMenuKey === next.setOpenSidebarMenuKey
+    && prev.getFoldersForScope === next.getFoldersForScope
+    && prev.getSessionFolderId === next.getSessionFolderId
+    && prev.removeSessionFromFolder === next.removeSessionFromFolder
+    && prev.addSessionToFolder === next.addSessionToFolder
+    && prev.createFolderAndStartRename === next.createFolderAndStartRename
+    && prev.openContextPanelTab === next.openContextPanelTab
+    && prev.handleDeleteSession === next.handleDeleteSession
+    && prev.renderSessionNode === next.renderSessionNode;
+};
+
+export const SessionNodeItem = React.memo(SessionNodeItemComponent, areSessionNodeItemPropsEqual);
